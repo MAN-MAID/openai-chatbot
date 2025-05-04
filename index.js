@@ -4,6 +4,7 @@ const cors = require('cors');
 const axios = require('axios');
 
 dotenv.config();
+
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -18,20 +19,20 @@ app.post('/chat', async (req, res) => {
       'https://api.openai.com/v1/chat/completions',
       {
         model: 'gpt-4',
-        messages: [{ role: 'user', content: message }]
+        messages: [{ role: 'user', content: message }],
       },
       {
         headers: {
           'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
+          'Content-Type': 'application/json',
+        },
       }
     );
 
     res.json({ reply: response.data.choices[0].message.content });
   } catch (error) {
     console.error('Error from OpenAI:', error.response?.data || error.message);
-    res.status(500).send('Error calling OpenAI');
+    res.status(500).json({ error: 'Error calling OpenAI' }); // ← JSON response
   }
 });
 
