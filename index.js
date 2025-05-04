@@ -7,7 +7,10 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['POST']
+}));
 app.use(express.json());
 
 app.post('/chat', async (req, res) => {
