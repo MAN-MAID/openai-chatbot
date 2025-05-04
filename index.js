@@ -1,9 +1,10 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
-const axios = require ('axios');
+const axios = require('axios');
 
 dotenv.config();
+
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -18,7 +19,7 @@ app.post('/chat', async (req, res) => {
 
   try {
     const response = await axios.post('https://api.openai.com/v1/chat/completions', {
-      model: 'gpt-3.5-turbo',
+      model: 'gpt-4',
       messages: [{ role: 'user', content: message }]
     }, {
       headers: {
@@ -27,17 +28,14 @@ app.post('/chat', async (req, res) => {
       }
     });
 
-    const reply = response?.data?.choices?.[0]?.message?.content || "No reply received.";
-    res.json({ reply });
+    res.json({ reply: response.data.choices[0].message.content });
 
-} catch (error) {
-  console.error('Error from OpenAI:', error.response?.data || error.message);
-  res.status(500).json({
-    error: error.response?.data || error.message || 'Unknown error'
-  });
-}
-
-
+  } catch (error) {
+    console.error('Error from OpenAI:', error.response?.data || error.message);
+    res.status(500).json({
+      error: error.response?.data?.error?.message || error.message || 'Unknown error'
+    });
+  }
 });
 
 app.get('/', (req, res) => {
