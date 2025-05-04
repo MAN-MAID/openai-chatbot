@@ -30,7 +30,8 @@ app.post('/chat', async (req, res) => {
     res.json({ reply: response.data.choices[0].message.content });
   } catch (error) {
     console.error('Error from OpenAI:', error.response?.data || error.message);
-    res.status(500).send('Error calling OpenAI');
+    res.status(500).json({ error: 'Error calling OpenAI' });
+
   }
 });
 
