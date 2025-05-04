@@ -30,12 +30,13 @@ app.post('/chat', async (req, res) => {
     const reply = response?.data?.choices?.[0]?.message?.content || "No reply received.";
     res.json({ reply });
 
-  } catch (error) {
-    console.error('Error from OpenAI:', error.response?.data || error.message);
-    res.status(500).json({
-      error: error.response?.data || error.message || 'Unknown error'
+} catch (error) {
+  console.error('Error from OpenAI:', error.response?.data || error.message);
+  res.status(500).json({
+    error: error.response?.data || error.message || 'Unknown error'
   });
 }
+
 
 
   }
