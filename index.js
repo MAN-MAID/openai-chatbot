@@ -104,6 +104,7 @@ app.post('/chat', async (req, res) => {
     reply = textPart.text.value;
   }
 }
+console.log('Assistant said:', reply);
 
 
     res.json({ reply: reply || 'No reply found.' });
