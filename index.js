@@ -1,111 +1,50 @@
-const express = require('express');
-const dotenv = require('dotenv');
-const cors = require('cors');
-const axios = require('axios');
+import express from "express";
+import cors from "cors";
+import { OpenAI } from "openai";
+import dotenv from "dotenv";
 
 dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(cors({
-  origin: '*',
-  methods: ['POST']
-}));
+app.use(cors());
 app.use(express.json());
 
-app.post('/chat', async (req, res) => {
-  const { message } = req.body;
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+app.post("/chat", async (req, res) => {
+  const userMessage = req.body.message;
+  const assistantId = process.env.ASSISTANT_ID;
 
   try {
-    // Step 1: Create a thread
-    const threadResponse = await axios.post(
-      'https://api.openai.com/v1/threads',
-      {},
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-          'OpenAI-Beta': 'assistants=v2',
-          'Content-Type': 'application/json'
-        }
-      }
-    );
+    const thread = await openai.beta.threads.create();
+    await openai.beta.threads.messages.create(thread.id, {
+      role: "user",
+      content: userMessage,
+    });
 
-    const threadId = threadResponse.data.id;
+    const run = await openai.beta.threads.runs.create(thread.id, {
+      assistant_id: assistantId,
+    });
 
-    // Step 2: Add message to the thread
-    await axios.post(
-      `https://api.openai.com/v1/threads/${threadId}/messages`,
-      {
-        role: 'user',
-        content: message
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-          'OpenAI-Beta': 'assistants=v2',
-          'Content-Type': 'application/json'
-        }
-      }
-    );
+    let runStatus;
+    do {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+    } while (runStatus.status !== "completed");
 
-    // Step 3: Run the assistant
-    const runResponse = await axios.post(
-      `https://api.openai.com/v1/threads/${threadId}/runs`,
-      {
-        assistant_id: process.env.ASSISTANT_ID  // Make sure this env var is set
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-          'OpenAI-Beta': 'assistants=v2',
-          'Content-Type': 'application/json'
-        }
-      }
-    );
+    const messages = await openai.beta.threads.messages.list(thread.id);
+    const lastMessage = messages.data.find(msg => msg.role === "assistant");
 
-    const runId = runResponse.data.id;
+    const textResponse = lastMessage?.content?.[0]?.text?.value || "Sorry, no reply.";
 
-    // Step 4: Wait for the run to complete (polling loop)
-    let runStatus = 'in_progress';
-    let runResult;
-
-    while (runStatus === 'in_progress') {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
-      const statusCheck = await axios.get(
-        `https://api.openai.com/v1/threads/${threadId}/runs/${runId}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-            'OpenAI-Beta': 'assistants=v2',
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      runStatus = statusCheck.data.status;
-      runResult = statusCheck.data;
-    }
-
-    // Step 5: Get the assistant's reply
-    const messagesRes = await axios.get(
-      `https://api.openai.com/v1/threads/${threadId}/messages`,
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-          'OpenAI-Beta': 'assistants=v2',
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    const assistantReply = messagesRes.data.data.find(msg => msg.role === 'assistant');
-
-    res.json({ reply: assistantReply?.content[0]?.text?.value || 'No response from assistant.' });
+    res.json({ reply: textResponse });
 
   } catch (error) {
-    console.error('Error using assistant API:', error.response?.data || error.message);
-    res.status(500).send('Assistant API error');
+    console.error("Error in /chat:", error.message || error);
+    res.status(500).json({ error: "Something went wrong." });
   }
 });
 
