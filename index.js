@@ -91,9 +91,20 @@ app.post('/chat', async (req, res) => {
       }
     );
 
-    const reply = messages.data.data
-      .find((msg) => msg.role === 'assistant')
-      ?.content[0]?.text?.value;
+  const assistantReply = messages.data.data.find(
+    (msg) => msg.role === 'assistant'
+  );
+
+  let reply = 'No reply found.';
+  if (assistantReply && assistantReply.content.length > 0) {
+  const textPart = assistantReply.content.find(
+    (c) => c.type === 'text' && c.text?.value
+  );
+  if (textPart) {
+    reply = textPart.text.value;
+  }
+}
+
 
     res.json({ reply: reply || 'No reply found.' });
   } catch (error) {
