@@ -1,12 +1,11 @@
 import express from "express";
 import cors from "cors";
-import { OpenAI } from "openai";
 import dotenv from "dotenv";
+import { OpenAI } from "openai";
 
 dotenv.config();
-const app = express();
-const port = process.env.PORT || 3000;
 
+const app = express();
 app.use(cors());
 app.use(express.json());
 
@@ -20,6 +19,7 @@ app.post("/chat", async (req, res) => {
 
   try {
     const thread = await openai.beta.threads.create();
+
     await openai.beta.threads.messages.create(thread.id, {
       role: "user",
       content: userMessage,
@@ -31,23 +31,24 @@ app.post("/chat", async (req, res) => {
 
     let runStatus;
     do {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise((r) => setTimeout(r, 1500));
       runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
     } while (runStatus.status !== "completed");
 
     const messages = await openai.beta.threads.messages.list(thread.id);
-    const lastMessage = messages.data.find(msg => msg.role === "assistant");
+    const reply = messages.data
+      .filter((m) => m.role === "assistant")
+      .map((m) => m.content[0].text.value)
+      .join("\n");
 
-    const textResponse = lastMessage?.content?.[0]?.text?.value || "Sorry, no reply.";
-
-    res.json({ reply: textResponse });
-
-  } catch (error) {
-    console.error("Error in /chat:", error.message || error);
-    res.status(500).json({ error: "Something went wrong." });
+    res.json({ reply });
+  } catch (err) {
+    console.error("Error in assistant response:", err.message);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
