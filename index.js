@@ -1,55 +1,65 @@
-import express from "express";
-import bodyParser from "body-parser";
-import cors from "cors";
-import dotenv from "dotenv";
-import OpenAI from "openai";
+import express from 'express';
+import multer from 'multer';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import fs from 'fs';
+import fetch from 'node-fetch';
+import FormData from 'form-data';
+import path from 'path';
 
 dotenv.config();
-
 const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
+app.use(express.static('public'));
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+const storage = multer.diskStorage({
+  destination: 'uploads/',
+  filename: (_, file, cb) => {
+    cb(null, `${Date.now()}-${file.originalname}`);
+  }
 });
+const upload = multer({ storage });
 
-app.post("/chat", async (req, res) => {
+app.post('/chat', upload.single('file'), async (req, res) => {
   try {
-    const userMessage = req.body.message;
-    if (!userMessage) {
-      return res.status(400).json({ reply: "Missing message in request." });
+    const userMessage = req.body.message || '';
+    const filePath = req.file?.path;
+
+    const form = new FormData();
+    form.append('model', 'gpt-4o');
+    form.append('messages', JSON.stringify([
+      { role: 'system', content: 'You are a helpful assistant for a handyman business.' },
+      { role: 'user', content: userMessage }
+    ]));
+
+    if (filePath) {
+      const fileStream = fs.createReadStream(filePath);
+      form.append('file', fileStream, path.basename(filePath));
     }
 
-    const thread = await openai.beta.threads.create();
-    await openai.beta.threads.messages.create(thread.id, {
-      role: "user",
-      content: userMessage,
+    const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+      },
+      body: form
     });
 
-    const run = await openai.beta.threads.runs.create(thread.id, {
-      assistant_id: process.env.ASSISTANT_ID,
-    });
+    const data = await openaiRes.json();
+    const reply = data?.choices?.[0]?.message?.content || 'Sorry, no response received.';
 
-    let runStatus;
-    do {
-      await new Promise((r) => setTimeout(r, 1000));
-      runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-    } while (runStatus.status !== "completed");
+    if (filePath) fs.unlinkSync(filePath); // Cleanup
 
-    const messages = await openai.beta.threads.messages.list(thread.id);
-    const lastMessage = messages.data.find((msg) => msg.role === "assistant");
-
-    res.json({ reply: lastMessage.content[0].text.value });
-
-  } catch (err) {
-    console.error("Error in /chat:", err);
-    res.status(500).json({ reply: "An error occurred." });
+    res.json({ reply });
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ reply: 'Server error occurred.' });
   }
 });
 
 app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+  console.log(`Server running at http://localhost:${port}`);
 });
