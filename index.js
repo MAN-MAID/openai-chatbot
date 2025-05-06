@@ -1,98 +1,59 @@
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-import OpenAI from "openai";
+const express = require("express");
+const bodyParser = require("body-parser");
+const cors = require("cors");
+const { OpenAI } = require("openai");
+require("dotenv").config();
 
-dotenv.config();
 const app = express();
+const port = process.env.PORT || 3000;
+
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+app.use(bodyParser.json());
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
-const assistantId = process.env.ASSISTANT_ID;
-let threadId = null;
-
-// Endpoint: Chat message handling
 app.post("/chat", async (req, res) => {
-  const userMessage = req.body.message;
   try {
-    if (!threadId) {
-      const thread = await openai.beta.threads.create();
-      threadId = thread.id;
-      console.log("Created new thread:", threadId);
+    const userMessage = req.body.message;
+    if (!userMessage) {
+      return res.status(400).json({ reply: "Missing message in request." });
     }
 
-    await openai.beta.threads.messages.create(threadId, {
+    // Create a new thread
+    const thread = await openai.beta.threads.create();
+
+    // Add user message
+    await openai.beta.threads.messages.create(thread.id, {
       role: "user",
       content: userMessage,
     });
 
-    const run = await openai.beta.threads.runs.create(threadId, {
-      assistant_id: assistantId,
+    // Run assistant on that thread
+    const run = await openai.beta.threads.runs.create(thread.id, {
+      assistant_id: process.env.ASSISTANT_ID,
     });
 
+    // Wait for the run to complete
     let runStatus;
     do {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      runStatus = await openai.beta.threads.runs.retrieve(threadId, run.id);
+      await new Promise((r) => setTimeout(r, 1000));
+      runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
     } while (runStatus.status !== "completed");
 
-    const messages = await openai.beta.threads.messages.list(threadId);
-    const reply = messages.data
-      .filter(m => m.role === "assistant")
-      .map(m => m.content[0].text.value)
-      .join("\n");
+    // Retrieve the final response
+    const messages = await openai.beta.threads.messages.list(thread.id);
+    const lastMessage = messages.data.find((msg) => msg.role === "assistant");
 
-    res.json({ reply });
-  } catch (err) {
-    console.error("Error:", err.message);
-    res.status(500).json({ error: "Something went wrong" });
+    res.json({ reply: lastMessage.content[0].text.value });
+
+  } catch (error) {
+    console.error("Error in /chat:", error);
+    res.status(500).json({ reply: "An error occurred while processing your message." });
   }
 });
 
-// Endpoint: File upload and attach
-app.post("/upload", async (req, res) => {
-  try {
-    const { name, type, base64 } = req.body;
-
-    if (!base64 || !type || !name) {
-      return res.status(400).json({ error: "Invalid file input" });
-    }
-
-    const buffer = Buffer.from(base64, "base64");
-
-    const uploadedFile = await openai.files.create({
-      file: buffer,
-      purpose: "assistants",
-      name
-    });
-
-    if (!threadId) {
-      const thread = await openai.beta.threads.create();
-      threadId = thread.id;
-    }
-
-    await openai.beta.threads.messages.create(threadId, {
-      role: "user",
-      content: "File uploaded for review.",
-      file_ids: [uploadedFile.id],
-    });
-
-    res.json({ success: true, file_id: uploadedFile.id });
-  } catch (err) {
-    console.error("Upload error:", err.message);
-    res.status(500).json({ error: "Failed to upload file" });
-  }
-});
-
-app.get("/", (req, res) => {
-  res.send("Assistant is live");
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
 });
