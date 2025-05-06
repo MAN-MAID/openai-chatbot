@@ -1,65 +1,56 @@
 import express from 'express';
 import multer from 'multer';
 import cors from 'cors';
-import dotenv from 'dotenv';
-import fs from 'fs';
-import fetch from 'node-fetch';
-import FormData from 'form-data';
+import { readFile } from 'fs/promises';
 import path from 'path';
+import { fileURLToPath } from 'url';
+import OpenAI from 'openai';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 const app = express();
-const port = process.env.PORT || 3000;
+const upload = multer({ dest: 'uploads/' });
 
 app.use(cors());
-app.use(express.json());
-app.use(express.static('public'));
-
-const storage = multer.diskStorage({
-  destination: 'uploads/',
-  filename: (_, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`);
-  }
-});
-const upload = multer({ storage });
 
 app.post('/chat', upload.single('file'), async (req, res) => {
   try {
     const userMessage = req.body.message || '';
-    const filePath = req.file?.path;
 
-    const form = new FormData();
-    form.append('model', 'gpt-4o');
-    form.append('messages', JSON.stringify([
-      { role: 'system', content: 'You are a helpful assistant for a handyman business.' },
-      { role: 'user', content: userMessage }
-    ]));
-
-    if (filePath) {
-      const fileStream = fs.createReadStream(filePath);
-      form.append('file', fileStream, path.basename(filePath));
+    let fileContent = '';
+    if (req.file) {
+      const buffer = await readFile(req.file.path);
+      fileContent = `\nUser uploaded file:\n${buffer.toString('base64').substring(0, 100)}...`; // short preview
     }
 
-    const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
-      },
-      body: form
+    if (!userMessage && !req.file) {
+      return res.status(400).json({ reply: 'Missing message or file in request.' });
+    }
+
+    const prompt = `${userMessage}${fileContent}`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        { role: 'system', content: 'You are Mungo’s helpful assistant.' },
+        { role: 'user', content: prompt },
+      ],
     });
 
-    const data = await openaiRes.json();
-    const reply = data?.choices?.[0]?.message?.content || 'Sorry, no response received.';
-
-    if (filePath) fs.unlinkSync(filePath); // Cleanup
-
+    const reply = completion.choices[0]?.message?.content || 'No reply generated.';
     res.json({ reply });
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ reply: 'Server error occurred.' });
+  } catch (err) {
+    console.error('Error:', err.message);
+    res.status(500).json({ reply: 'Server error. Please try again later.' });
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
