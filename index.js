@@ -1,56 +1,62 @@
-import express from 'express';
-import multer from 'multer';
-import cors from 'cors';
-import { readFile } from 'fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import OpenAI from 'openai';
+// index.js
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import { OpenAI } from "openai";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
+dotenv.config();
 const app = express();
-const upload = multer({ dest: 'uploads/' });
-
 app.use(cors());
+app.use(express.json({ limit: "1mb" }));
 
-app.post('/chat', upload.single('file'), async (req, res) => {
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const assistantId = process.env.ASSISTANT_ID;
+let threadId = null;
+
+app.post("/chat", async (req, res) => {
   try {
-    const userMessage = req.body.message || '';
-
-    let fileContent = '';
-    if (req.file) {
-      const buffer = await readFile(req.file.path);
-      fileContent = `\nUser uploaded file:\n${buffer.toString('base64').substring(0, 100)}...`; // short preview
+    const userMessage = req.body.message;
+    if (!userMessage) {
+      return res.status(400).json({ error: "Missing message in request." });
     }
 
-    if (!userMessage && !req.file) {
-      return res.status(400).json({ reply: 'Missing message or file in request.' });
+    if (!threadId) {
+      const thread = await openai.beta.threads.create();
+      threadId = thread.id;
     }
 
-    const prompt = `${userMessage}${fileContent}`;
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: [
-        { role: 'system', content: 'You are Mungo’s helpful assistant.' },
-        { role: 'user', content: prompt },
-      ],
+    // send user message
+    await openai.beta.threads.messages.create(threadId, {
+      role: "user",
+      content: userMessage,
     });
 
-    const reply = completion.choices[0]?.message?.content || 'No reply generated.';
+    // run assistant
+    const run = await openai.beta.threads.runs.create(threadId, {
+      assistant_id: assistantId,
+    });
+
+    // poll until complete
+    let status;
+    do {
+      await new Promise(r => setTimeout(r, 500));
+      status = await openai.beta.threads.runs.retrieve(threadId, run.id);
+    } while (status.status !== "completed");
+
+    // collect reply
+    const msgs = await openai.beta.threads.messages.list(threadId);
+    const reply = msgs.data
+      .filter(m => m.role === "assistant")
+      .map(m => m.content[0].text.value)
+      .join("\n");
+
     res.json({ reply });
-  } catch (err) {
-    console.error('Error:', err.message);
-    res.status(500).json({ reply: 'Server error. Please try again later.' });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Server error." });
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+app.listen(process.env.PORT || 3000, () =>
+  console.log("🚀 Listening for chat…")
+);
