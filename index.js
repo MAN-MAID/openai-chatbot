@@ -67,6 +67,28 @@ app.post("/chat", async (req, res) => {
       console.log("Processing image with Chat Completions API");
       
       try {
+        let imageUrl;
+        
+        // Handle different file data formats
+        if (fileData.data) {
+          // Base64 data
+          imageUrl = fileData.data;
+          console.log("Using base64 image data");
+        } else if (fileData.wixUrl) {
+          // Wix URL - fetch and convert to base64
+          console.log("Fetching image from Wix URL:", fileData.wixUrl);
+          const response = await fetch(fileData.wixUrl);
+          if (!response.ok) {
+            throw new Error(`Failed to fetch Wix file: ${response.status}`);
+          }
+          const buffer = await response.arrayBuffer();
+          const base64 = Buffer.from(buffer).toString('base64');
+          imageUrl = `data:${fileData.type};base64,${base64}`;
+          console.log("Converted Wix URL to base64");
+        } else {
+          throw new Error("No image data or URL provided");
+        }
+        
         const response = await openai.chat.completions.create({
           model: "gpt-4-vision-preview", // or "gpt-4o" if available
           messages: [
@@ -80,7 +102,7 @@ app.post("/chat", async (req, res) => {
                 {
                   type: "image_url",
                   image_url: {
-                    url: fileData.data
+                    url: imageUrl
                   }
                 }
               ]
