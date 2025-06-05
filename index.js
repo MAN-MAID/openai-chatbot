@@ -56,7 +56,17 @@ app.use(express.json({ limit: "50mb" })); // Increased limit for base64 files
 
 app.post("/chat", async (req, res) => {
   try {
+    console.log("=== NEW CHAT REQUEST ===");
     const { message, fileData } = req.body;
+    console.log("Message:", message || "(none)");
+    console.log("FileData received:", fileData ? {
+      name: fileData.name,
+      type: fileData.type,
+      hasData: !!fileData.data,
+      hasWixUrl: !!fileData.wixUrl,
+      dataLength: fileData.data ? fileData.data.length : 0,
+      wixUrl: fileData.wixUrl ? fileData.wixUrl.substring(0, 100) + "..." : "(none)"
+    } : "(none)");
     
     if (!message && !fileData) {
       return res.status(400).json({ error: "Need message or fileData." });
@@ -75,16 +85,32 @@ app.post("/chat", async (req, res) => {
           imageUrl = fileData.data;
           console.log("Using base64 image data");
         } else if (fileData.wixUrl) {
-          // Wix URL - fetch and convert to base64
-          console.log("Fetching image from Wix URL:", fileData.wixUrl);
-          const response = await fetch(fileData.wixUrl);
+          // Wix URL - convert to HTTP URL and fetch
+          console.log("Processing Wix URL:", fileData.wixUrl);
+          
+          // Convert wix:image:// URL to proper HTTP URL
+          let httpUrl;
+          if (fileData.wixUrl.startsWith('wix:image://')) {
+            // Extract the image path and convert to HTTP
+            const wixPath = fileData.wixUrl.replace('wix:image://', '');
+            httpUrl = `https://static.wixstatic.com/media/${wixPath}`;
+            console.log("Converted to HTTP URL:", httpUrl);
+          } else if (fileData.wixUrl.startsWith('http')) {
+            // Already an HTTP URL
+            httpUrl = fileData.wixUrl;
+          } else {
+            throw new Error("Unsupported Wix URL format");
+          }
+          
+          console.log("Fetching image from HTTP URL:", httpUrl);
+          const response = await fetch(httpUrl);
           if (!response.ok) {
             throw new Error(`Failed to fetch Wix file: ${response.status}`);
           }
           const buffer = await response.arrayBuffer();
           const base64 = Buffer.from(buffer).toString('base64');
           imageUrl = `data:${fileData.type};base64,${base64}`;
-          console.log("Converted Wix URL to base64");
+          console.log("Successfully converted Wix URL to base64");
         } else {
           throw new Error("No image data or URL provided");
         }
@@ -247,9 +273,15 @@ app.post("/chat", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Error in /chat:", err);
+    console.error("=== CHAT ERROR ===");
+    console.error("Error type:", err.constructor.name);
+    console.error("Error message:", err.message);
+    console.error("Error stack:", err.stack);
+    console.error("===================");
+    
     res.status(500).json({ 
       error: err.message,
+      type: err.constructor.name,
       details: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
   }
