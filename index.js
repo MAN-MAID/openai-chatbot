@@ -90,16 +90,16 @@ app.post("/chat", async (req, res) => {
           
           // Convert wix:image:// URL to proper HTTP URL
           let httpUrl;
-          if (fileData.wixUrl.startsWith('wix:image://')) {
+          if (fileData.wixUrl && fileData.wixUrl.startsWith('wix:image://')) {
             // Extract the image path and convert to HTTP
             const wixPath = fileData.wixUrl.replace('wix:image://', '');
             httpUrl = `https://static.wixstatic.com/media/${wixPath}`;
             console.log("Converted to HTTP URL:", httpUrl);
-          } else if (fileData.wixUrl.startsWith('http')) {
+          } else if (fileData.wixUrl && fileData.wixUrl.startsWith('http')) {
             // Already an HTTP URL
             httpUrl = fileData.wixUrl;
           } else {
-            throw new Error("Unsupported Wix URL format");
+            throw new Error(`Unsupported Wix URL format: ${fileData.wixUrl || 'undefined'}`);
           }
           
           console.log("Fetching image from HTTP URL:", httpUrl);
