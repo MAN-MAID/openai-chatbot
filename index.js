@@ -69,30 +69,64 @@ app.post("/chat", async (req, res) => {
       console.log("Received file:", fileData.name, "Type:", fileData.type);
       
       try {
-        // Convert base64 to buffer
-        const fileBuffer = base64ToBuffer(fileData.data);
-        const fileExtension = getFileExtension(fileData.type);
-        const fileName = fileData.name || `file.${fileExtension}`;
+        // Check if it's an image file for vision
+        const isImage = fileData.type.startsWith('image/');
+        console.log("Is image file:", isImage);
         
-        console.log("File size:", fileBuffer.length, "bytes");
-        
-        // Create a File-like object for OpenAI
-        const fileBlob = new Blob([fileBuffer], { type: fileData.type });
-        
-        // Upload to OpenAI files
-        const uploadedFile = await openai.files.create({
-          file: new File([fileBlob], fileName, { type: fileData.type }),
-          purpose: "vision"
-        });
-        
-        console.log("Uploaded to OpenAI file ID:", uploadedFile.id);
-        
-        // Add file message to thread
-        await openai.beta.threads.messages.create(tid, {
-          role: "user",
-          content: "Here's a file for you to analyze.",
-          file_ids: [uploadedFile.id]
-        });
+        if (isImage) {
+          // For images, use the new vision format with image_url
+          console.log("Processing image with vision API");
+          console.log("Image data length:", fileData.data.length);
+          console.log("Image data starts with:", fileData.data.substring(0, 50));
+          
+          const messageResult = await openai.beta.threads.messages.create(tid, {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Please analyze this image and describe what you see in detail."
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: fileData.data // Use the base64 data URL directly
+                }
+              }
+            ]
+          });
+          console.log("Image message created successfully:", messageResult.id);
+          
+        } else {
+          // For non-image files, upload to OpenAI files
+          const fileBuffer = base64ToBuffer(fileData.data);
+          const fileExtension = getFileExtension(fileData.type);
+          const fileName = fileData.name || `file.${fileExtension}`;
+          
+          console.log("File size:", fileBuffer.length, "bytes");
+          
+          // Create a File-like object for OpenAI
+          const fileBlob = new Blob([fileBuffer], { type: fileData.type });
+          
+          // Upload to OpenAI files
+          const uploadedFile = await openai.files.create({
+            file: new File([fileBlob], fileName, { type: fileData.type }),
+            purpose: "assistants"
+          });
+          
+          console.log("Uploaded to OpenAI file ID:", uploadedFile.id);
+          
+          // Add file message to thread
+          await openai.beta.threads.messages.create(tid, {
+            role: "user",
+            content: "Here's a file for you to analyze.",
+            attachments: [
+              {
+                file_id: uploadedFile.id,
+                tools: [{ type: "file_search" }]
+              }
+            ]
+          });
+        }
         
       } catch (fileError) {
         console.error("File processing error:", fileError);
