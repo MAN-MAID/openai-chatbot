@@ -62,71 +62,84 @@ app.post("/chat", async (req, res) => {
       return res.status(400).json({ error: "Need message or fileData." });
     }
 
-    const tid = await ensureThread();
-
-    // Handle base64 file data
-    if (fileData) {
-      console.log("Received file:", fileData.name, "Type:", fileData.type);
+    // Handle images differently - use Chat Completions API for better vision support
+    if (fileData && fileData.type.startsWith('image/')) {
+      console.log("Processing image with Chat Completions API");
       
       try {
-        // Check if it's an image file for vision
-        const isImage = fileData.type.startsWith('image/');
-        console.log("Is image file:", isImage);
-        
-        if (isImage) {
-          // For images, use the new vision format with image_url
-          console.log("Processing image with vision API");
-          console.log("Image data length:", fileData.data.length);
-          console.log("Image data starts with:", fileData.data.substring(0, 50));
-          
-          const messageResult = await openai.beta.threads.messages.create(tid, {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Please analyze this image and describe what you see in detail."
-              },
-              {
-                type: "image_url",
-                image_url: {
-                  url: fileData.data // Use the base64 data URL directly
+        const response = await openai.chat.completions.create({
+          model: "gpt-4-vision-preview", // or "gpt-4o" if available
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: message || "Please analyze this image and describe what you see in detail."
+                },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: fileData.data
+                  }
                 }
-              }
-            ]
-          });
-          console.log("Image message created successfully:", messageResult.id);
-          
-        } else {
-          // For non-image files, upload to OpenAI files
-          const fileBuffer = base64ToBuffer(fileData.data);
-          const fileExtension = getFileExtension(fileData.type);
-          const fileName = fileData.name || `file.${fileExtension}`;
-          
-          console.log("File size:", fileBuffer.length, "bytes");
-          
-          // Create a File-like object for OpenAI
-          const fileBlob = new Blob([fileBuffer], { type: fileData.type });
-          
-          // Upload to OpenAI files
-          const uploadedFile = await openai.files.create({
-            file: new File([fileBlob], fileName, { type: fileData.type }),
-            purpose: "assistants"
-          });
-          
-          console.log("Uploaded to OpenAI file ID:", uploadedFile.id);
-          
-          // Add file message to thread
-          await openai.beta.threads.messages.create(tid, {
-            role: "user",
-            content: "Here's a file for you to analyze.",
-            attachments: [
-              {
-                file_id: uploadedFile.id,
-                tools: [{ type: "file_search" }]
-              }
-            ]
-          });
-        }
+              ]
+            }
+          ],
+          max_tokens: 1000
+        });
+        
+        const reply = response.choices[0].message.content;
+        console.log("Vision API response received");
+        
+        return res.json({ 
+          reply: reply,
+          method: "vision-api"
+        });
+        
+      } catch (visionError) {
+        console.error("Vision API error:", visionError);
+        // Fall back to assistant method if vision API fails
+      }
+    }
+
+    // Original assistant method for non-images or as fallback
+    const tid = await ensureThread();
+
+    // Handle non-image files or fallback
+    if (fileData && !fileData.type.startsWith('image/')) {
+      console.log("Processing non-image file with Assistant API");
+      
+      try {
+        // For non-image files, upload to OpenAI files
+        const fileBuffer = base64ToBuffer(fileData.data);
+        const fileExtension = getFileExtension(fileData.type);
+        const fileName = fileData.name || `file.${fileExtension}`;
+        
+        console.log("File size:", fileBuffer.length, "bytes");
+        
+        // Create a File-like object for OpenAI
+        const fileBlob = new Blob([fileBuffer], { type: fileData.type });
+        
+        // Upload to OpenAI files
+        const uploadedFile = await openai.files.create({
+          file: new File([fileBlob], fileName, { type: fileData.type }),
+          purpose: "assistants"
+        });
+        
+        console.log("Uploaded to OpenAI file ID:", uploadedFile.id);
+        
+        // Add file message to thread
+        await openai.beta.threads.messages.create(tid, {
+          role: "user",
+          content: "Here's a file for you to analyze.",
+          attachments: [
+            {
+              file_id: uploadedFile.id,
+              tools: [{ type: "file_search" }]
+            }
+          ]
+        });
         
       } catch (fileError) {
         console.error("File processing error:", fileError);
@@ -144,6 +157,13 @@ app.post("/chat", async (req, res) => {
         content: message
       });
     }
+
+    // Check what messages are in the thread before running
+    const preRunMessages = await openai.beta.threads.messages.list(tid);
+    console.log("Messages in thread before run:", preRunMessages.data.length);
+    preRunMessages.data.forEach((msg, idx) => {
+      console.log(`Message ${idx}:`, msg.role, msg.content.map(c => c.type));
+    });
 
     // Run the assistant
     console.log("Starting assistant run...");
@@ -200,7 +220,8 @@ app.post("/chat", async (req, res) => {
     res.json({ 
       reply: reply || "I received your message but couldn't generate a response.",
       threadId: tid,
-      runId: run.id
+      runId: run.id,
+      method: "assistant-api"
     });
 
   } catch (err) {
