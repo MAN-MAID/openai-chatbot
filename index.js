@@ -54,6 +54,80 @@ function getFileExtension(mimeType) {
 app.use(cors());
 app.use(express.json({ limit: "50mb" })); // Increased limit for base64 files
 
+// Helper endpoint to fetch Wix images
+app.post("/fetch-wix-image", async (req, res) => {
+  try {
+    const { wixUrl, fileName } = req.body;
+    console.log("=== WIX IMAGE FETCH REQUEST ===");
+    console.log("Wix URL:", wixUrl);
+    console.log("File name:", fileName);
+    
+    if (!wixUrl) {
+      return res.status(400).json({ error: "Wix URL required" });
+    }
+    
+    // Try multiple URL patterns for Wix media
+    const urlPatterns = [];
+    
+    if (wixUrl.startsWith('wix:image://')) {
+      const wixPath = wixUrl.replace('wix:image://', '');
+      urlPatterns.push(
+        `https://static.wixstatic.com/media/${wixPath}`,
+        `https://images.wixmp.com/${wixPath}`,
+        `https://www.wixstatic.com/media/${wixPath}`
+      );
+    }
+    
+    console.log("Trying URL patterns:", urlPatterns);
+    
+    for (const testUrl of urlPatterns) {
+      try {
+        console.log("Testing:", testUrl);
+        const response = await fetch(testUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; OpenAI-ImageBot/1.0)',
+            'Accept': 'image/*',
+            'Referer': 'https://www.wix.com/'
+          }
+        });
+        
+        if (response.ok) {
+          const buffer = await response.arrayBuffer();
+          const base64 = Buffer.from(buffer).toString('base64');
+          const base64Data = `data:image/jpeg;base64,${base64}`;
+          
+          console.log("✅ Successfully fetched image, size:", buffer.byteLength);
+          
+          return res.json({
+            success: true,
+            base64Data: base64Data,
+            fileName: fileName,
+            size: buffer.byteLength
+          });
+        } else {
+          console.log("❌ Failed with status:", response.status);
+        }
+      } catch (fetchError) {
+        console.log("❌ Fetch error:", fetchError.message);
+      }
+    }
+    
+    console.log("❌ All URL patterns failed");
+    res.json({
+      success: false,
+      error: "Could not fetch image from Wix URL"
+    });
+    
+  } catch (error) {
+    console.error("=== WIX IMAGE FETCH ERROR ===");
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 app.post("/chat", async (req, res) => {
   try {
     console.log("=== NEW CHAT REQUEST ===");
