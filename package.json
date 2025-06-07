@@ -1,15 +1,22 @@
 {
   "name": "openai-chatbot",
   "version": "1.0.0",
+  "description": "OpenAI chatbot with image analysis for Wix",
   "main": "index.js",
-  "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "openai": "^4.0.0",
     "cors": "^2.8.5",
+    "node-fetch": "^2.6.9",
     "dotenv": "^16.0.3"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  },
+  "engines": {
+    "node": ">=14.0.0"
   }
 }
