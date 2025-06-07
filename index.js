@@ -55,6 +55,146 @@ app.use(cors());
 app.use(express.json({ limit: "100mb" })); // Increased limit for large base64 images
 app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
+// New endpoint to analyze Wix CMS images
+app.post("/analyze-wix-image", async (req, res) => {
+  try {
+    console.log("=== WIX CMS IMAGE ANALYSIS REQUEST ===");
+    const { imageUrl, message } = req.body;
+    console.log("Image URL:", imageUrl);
+    console.log("Message:", message);
+    
+    if (!imageUrl) {
+      return res.status(400).json({ error: "Image URL required" });
+    }
+    
+    // For Wix CMS images, we can try direct access or use the fetch methods
+    let imageData = null;
+    
+    // Method 1: Try direct access to Wix image URL
+    if (imageUrl.startsWith('wix:image://')) {
+      console.log("Processing Wix image URL...");
+      
+      // Try the same URL patterns as before
+      const wixPath = imageUrl.replace('wix:image://', '');
+      const urlPatterns = [
+        `https://static.wixstatic.com/media/${wixPath}`,
+        `https://images.wixmp.com/${wixPath}`,
+        `https://www.wixstatic.com/media/${wixPath}`
+      ];
+      
+      for (const testUrl of urlPatterns) {
+        try {
+          console.log("Testing CMS image URL:", testUrl.substring(0, 80) + "...");
+          
+          const response = await fetch(testUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Accept': 'image/*',
+              'Referer': 'https://www.wix.com/'
+            }
+          });
+          
+          if (response.ok) {
+            const buffer = await response.arrayBuffer();
+            const base64 = Buffer.from(buffer).toString('base64');
+            const mimeType = response.headers.get('content-type') || 'image/jpeg';
+            imageData = `data:${mimeType};base64,${base64}`;
+            console.log("✅ Successfully fetched CMS image");
+            break;
+          }
+        } catch (fetchError) {
+          console.log("❌ CMS URL failed:", fetchError.message);
+        }
+      }
+    } else if (imageUrl.startsWith('http')) {
+      // Method 2: Direct HTTP URL (might work for some Wix CMS images)
+      try {
+        console.log("Trying direct HTTP access...");
+        const response = await fetch(imageUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; OpenAI-ImageBot/1.0)',
+            'Accept': 'image/*'
+          }
+        });
+        
+        if (response.ok) {
+          const buffer = await response.arrayBuffer();
+          const base64 = Buffer.from(buffer).toString('base64');
+          const mimeType = response.headers.get('content-type') || 'image/jpeg';
+          imageData = `data:${mimeType};base64,${base64}`;
+          console.log("✅ Direct HTTP access successful");
+        }
+      } catch (directError) {
+        console.log("❌ Direct HTTP failed:", directError.message);
+      }
+    }
+    
+    if (!imageData) {
+      console.log("❌ Could not access image, using text-only response");
+      
+      // Fall back to text-only response
+      const textResponse = await openai.chat.completions.create({
+        model: "gpt-4",
+        messages: [
+          {
+            role: "user",
+            content: `User uploaded an image but I cannot access it directly. They asked: "${message}". Please respond helpfully explaining that you cannot see the image but offer to help with their question in other ways.`
+          }
+        ],
+        max_tokens: 500
+      });
+      
+      return res.json({
+        reply: textResponse.choices[0].message.content,
+        imageProcessed: false,
+        note: "Image could not be accessed, provided text response instead"
+      });
+    }
+    
+    // Send to OpenAI Vision API
+    console.log("Sending to OpenAI Vision API...");
+    const response = await openai.chat.completions.create({
+      model: "gpt-4-vision-preview",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: message || "Please analyze this image and describe what you see in detail."
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: imageData
+              }
+            }
+          ]
+        }
+      ],
+      max_tokens: 1000
+    });
+    
+    const reply = response.choices[0].message.content;
+    console.log("✅ Vision API analysis complete");
+    
+    res.json({
+      reply: reply,
+      imageProcessed: true,
+      method: "wix-cms-vision"
+    });
+    
+  } catch (error) {
+    console.error("=== WIX CMS IMAGE ANALYSIS ERROR ===");
+    console.error("Error:", error.message);
+    
+    res.status(500).json({
+      error: error.message,
+      imageProcessed: false
+    });
+  }
+});
+
 // New endpoint to process Wix files
 app.post("/process-wix-file", async (req, res) => {
   try {
