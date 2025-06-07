@@ -92,21 +92,20 @@ app.post('/chat', async (req, res) => {
     let status = initStatus;
     while (['queued','in_progress'].includes(status)) {
       await new Promise(r => setTimeout(r, 1000));
-      const poll = await fetch(
-        `${OPENAI_BASE}/threads/${thread_id}/runs/${run_id}`,
-        { headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER } }
-      );
+      const poll = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs/${run_id}`, {
+        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER }
+      });
       if (!poll.ok) throw new Error(await poll.text());
       status = (await poll.json()).status;
     }
 
-    // 5) fetch messages & reply
+    // 5) fetch reply
     const all = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
       headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER }
     });
     if (!all.ok) throw new Error(await all.text());
     const { data: msgs } = await all.json();
-    const reply = msgs.reverse().find(m => m.role==='assistant')?.content || '';
+    const reply = msgs.reverse().find(m => m.role === 'assistant')?.content || '';
 
     res.json({ reply });
   } catch (err) {
@@ -123,7 +122,7 @@ app.post('/analyze-wix-image', async (req, res) => {
   }
 
   try {
-    // save image locally
+    // save image locally & get URL
     let finalImageUrl;
     if (imageBase64) {
       const buf = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
@@ -187,15 +186,14 @@ app.post('/analyze-wix-image', async (req, res) => {
     let status = initStatus;
     while (['queued','in_progress'].includes(status)) {
       await new Promise(r => setTimeout(r, 1000));
-      const poll = await fetch(
-        `${OPENAI_BASE}/threads/${thread_id}/runs/${run_id}`,
-        { headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER } }
-      );
-      if (!poll.ok) throw new Error(await poll.text());
-      status = (await poll.json()).status;
+      const p = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs/${run_id}`, {
+        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER }
+      });
+      if (!p.ok) throw new Error(await p.text());
+      status = (await p.json()).status;
     }
 
-    // 5) fetch messages & reply
+    // 5) fetch reply
     const all = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
       headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER }
     });
@@ -210,13 +208,13 @@ app.post('/analyze-wix-image', async (req, res) => {
   }
 });
 
-// — global error handler — //
+// global error handler
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal error', details: err.message });
 });
 
-// — start server — //
+// start server
 app.listen(PORT, () => {
   console.log(`🚀 Server on port ${PORT}`);
   if (!OPENAI_API_KEY)      console.warn('⚠️ OPENAI_API_KEY missing!');
