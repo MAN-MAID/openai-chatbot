@@ -1,3 +1,5 @@
+console.log('🚨 Running UPDATED handler 🚨');
+
 // index.js
 const express = require('express');
 const fetch   = require('node-fetch');
