@@ -15,7 +15,12 @@ const SERVER_URL = process.env.SERVER_URL || `http://localhost:${PORT}`;
 
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-app.use(cors());
+app.use(cors({
+  origin: 'https://www.man-maid.co.uk',
+  methods: ['GET', 'POST'],
+  credentials: false
+}));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -42,6 +47,10 @@ app.post('/analyze-wix-image', async (req, res) => {
   let finalImageUrl;
 
   try {
+    if (!OPENAI_ASSISTANT_ID) {
+      throw new Error('OPENAI_ASSISTANT_ID is not set in the environment variables.');
+    }
+
     if (imageBase64) {
       const base64Clean = imageBase64.replace(/^data:image\/\w+;base64,/, '');
       const buffer = Buffer.from(base64Clean, 'base64');
@@ -61,7 +70,6 @@ app.post('/analyze-wix-image', async (req, res) => {
       return res.status(400).json({ error: 'Image is required.' });
     }
 
-    // 1. Create thread
     const threadRes = await fetch('https://api.openai.com/v1/threads', {
       method: 'POST',
       headers: {
@@ -71,7 +79,6 @@ app.post('/analyze-wix-image', async (req, res) => {
     });
     const thread = await threadRes.json();
 
-    // 2. Add user message
     await fetch(`https://api.openai.com/v1/threads/${thread.id}/messages`, {
       method: 'POST',
       headers: {
@@ -87,7 +94,6 @@ app.post('/analyze-wix-image', async (req, res) => {
       })
     });
 
-    // 3. Run assistant
     const runRes = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs`, {
       method: 'POST',
       headers: {
@@ -98,7 +104,6 @@ app.post('/analyze-wix-image', async (req, res) => {
     });
     const run = await runRes.json();
 
-    // 4. Poll for completion
     let runStatus = run.status;
     while (runStatus !== 'completed' && runStatus !== 'failed') {
       await new Promise(r => setTimeout(r, 1500));
@@ -109,7 +114,6 @@ app.post('/analyze-wix-image', async (req, res) => {
       runStatus = pollData.status;
     }
 
-    // 5. Get messages
     const messagesRes = await fetch(`https://api.openai.com/v1/threads/${thread.id}/messages`, {
       headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` }
     });
