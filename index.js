@@ -67,47 +67,91 @@ app.post("/analyze-wix-image", async (req, res) => {
       return res.status(400).json({ error: "Image URL required" });
     }
     
-    // For Wix CMS images, we can try direct access or use the fetch methods
     let imageData = null;
     
-    // Method 1: Try direct access to Wix image URL
+    // Enhanced Wix URL processing
     if (imageUrl.startsWith('wix:image://')) {
       console.log("Processing Wix image URL...");
       
-      // Try the same URL patterns as before
+      // Extract the path and try multiple URL patterns
       const wixPath = imageUrl.replace('wix:image://', '');
-      const urlPatterns = [
-        `https://static.wixstatic.com/media/${wixPath}`,
-        `https://images.wixmp.com/${wixPath}`,
-        `https://www.wixstatic.com/media/${wixPath}`
-      ];
+      console.log("Wix path:", wixPath);
       
-      for (const testUrl of urlPatterns) {
-        try {
-          console.log("Testing CMS image URL:", testUrl.substring(0, 80) + "...");
+      // Split path to get components
+      const pathParts = wixPath.split('/');
+      if (pathParts.length >= 2) {
+        const mediaId = pathParts[0]; // e.g., "v1/2161b9_xxxxx~mv2.jpg"
+        const filename = pathParts[1].split('#')[0]; // Remove any URL parameters
+        
+        console.log("Media ID:", mediaId);
+        console.log("Filename:", filename);
+        
+        // Try comprehensive URL patterns
+        const urlPatterns = [
+          // Standard patterns
+          `https://static.wixstatic.com/media/${wixPath}`,
+          `https://static.wixstatic.com/media/${mediaId}`,
+          `https://static.wixstatic.com/media/${mediaId}/${filename}`,
           
-          const response = await fetch(testUrl, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-              'Accept': 'image/*',
-              'Referer': 'https://www.wix.com/'
+          // Alternative domains
+          `https://images.wixmp.com/${wixPath}`,
+          `https://images.wixmp.com/${mediaId}`,
+          `https://www.wixstatic.com/media/${wixPath}`,
+          
+          // Try without version prefix
+          `https://static.wixstatic.com/media/${wixPath.replace('v1/', '')}`,
+          
+          // Try direct file access
+          `https://static.wixstatic.com/media/${mediaId.replace('~mv2.jpg', '.jpg')}`,
+          
+          // Try thumbnail versions (sometimes more accessible)
+          `https://static.wixstatic.com/media/${mediaId}/v1/crop/x_0,y_0,w_1500,h_1300/${filename}`,
+          `https://static.wixstatic.com/media/${mediaId}/v1/fill/w_500,h_400/${filename}`
+        ];
+        
+        console.log("Trying", urlPatterns.length, "URL patterns...");
+        
+        for (let i = 0; i < urlPatterns.length; i++) {
+          const testUrl = urlPatterns[i];
+          console.log(`Testing URL ${i + 1}:`, testUrl.substring(0, 100) + "...");
+          
+          try {
+            const response = await fetch(testUrl, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'image/webp,image/apng,image/jpeg,image/png,image/*,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Referer': 'https://www.wix.com/',
+                'Origin': 'https://www.wix.com',
+                'Sec-Fetch-Dest': 'image',
+                'Sec-Fetch-Mode': 'cors',
+                'Sec-Fetch-Site': 'cross-site',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
+              },
+              timeout: 10000
+            });
+            
+            console.log(`Response ${i + 1}:`, response.status, response.headers.get('content-type'));
+            
+            if (response.ok) {
+              const buffer = await response.arrayBuffer();
+              if (buffer.byteLength > 0) {
+                const base64 = Buffer.from(buffer).toString('base64');
+                const mimeType = response.headers.get('content-type') || 'image/jpeg';
+                imageData = `data:${mimeType};base64,${base64}`;
+                console.log("✅ Successfully fetched image from URL", i + 1, "- Size:", buffer.byteLength, "bytes");
+                break;
+              }
             }
-          });
-          
-          if (response.ok) {
-            const buffer = await response.arrayBuffer();
-            const base64 = Buffer.from(buffer).toString('base64');
-            const mimeType = response.headers.get('content-type') || 'image/jpeg';
-            imageData = `data:${mimeType};base64,${base64}`;
-            console.log("✅ Successfully fetched CMS image");
-            break;
+          } catch (fetchError) {
+            console.log(`❌ URL ${i + 1} failed:`, fetchError.message);
           }
-        } catch (fetchError) {
-          console.log("❌ CMS URL failed:", fetchError.message);
         }
       }
     } else if (imageUrl.startsWith('http')) {
-      // Method 2: Direct HTTP URL (might work for some Wix CMS images)
+      // Direct HTTP URL
       try {
         console.log("Trying direct HTTP access...");
         const response = await fetch(imageUrl, {
@@ -130,29 +174,37 @@ app.post("/analyze-wix-image", async (req, res) => {
     }
     
     if (!imageData) {
-      console.log("❌ Could not access image, using text-only response");
+      console.log("❌ Could not access image from any URL pattern");
       
-      // Fall back to text-only response
-      const textResponse = await openai.chat.completions.create({
+      // Enhanced fallback response
+      const fallbackResponse = await openai.chat.completions.create({
         model: "gpt-4",
         messages: [
           {
             role: "user",
-            content: `User uploaded an image but I cannot access it directly. They asked: "${message}". Please respond helpfully explaining that you cannot see the image but offer to help with their question in other ways.`
+            content: `A user uploaded an image to analyze but I cannot access it directly due to Wix's security restrictions. The user asked: "${message}". 
+
+Please provide a helpful response that:
+1. Acknowledges they uploaded an image
+2. Explains that while you can't see this specific image, you can help in other ways
+3. Offers to help them describe what they're looking for or answer questions about images in general
+4. Suggests they could describe the image to you instead
+
+Be friendly and helpful, not apologetic.`
           }
         ],
-        max_tokens: 500
+        max_tokens: 300
       });
       
       return res.json({
-        reply: textResponse.choices[0].message.content,
+        reply: fallbackResponse.choices[0].message.content,
         imageProcessed: false,
-        note: "Image could not be accessed, provided text response instead"
+        note: "Image could not be accessed due to Wix security restrictions"
       });
     }
     
-    // Send to OpenAI Vision API
-    console.log("Sending to OpenAI Vision API...");
+    // SUCCESS! Send to OpenAI Vision API
+    console.log("🎉 SUCCESS! Sending to OpenAI Vision API...");
     const response = await openai.chat.completions.create({
       model: "gpt-4-vision-preview",
       messages: [
@@ -176,17 +228,18 @@ app.post("/analyze-wix-image", async (req, res) => {
     });
     
     const reply = response.choices[0].message.content;
-    console.log("✅ Vision API analysis complete");
+    console.log("🎉 Vision API analysis complete! Reply length:", reply.length);
     
     res.json({
       reply: reply,
       imageProcessed: true,
-      method: "wix-cms-vision"
+      method: "wix-vision-success"
     });
     
   } catch (error) {
     console.error("=== WIX CMS IMAGE ANALYSIS ERROR ===");
     console.error("Error:", error.message);
+    console.error("Stack:", error.stack);
     
     res.status(500).json({
       error: error.message,
