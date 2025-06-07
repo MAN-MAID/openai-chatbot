@@ -54,7 +54,7 @@ app.post('/chat', async (req, res) => {
 
   try {
     // 1) create thread
-    const thrRes = await fetch(`${OPENAI_BASE}/threads`, {
+    const thr = await fetch(`${OPENAI_BASE}/threads`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${OPENAI_API_KEY}`,
@@ -63,11 +63,11 @@ app.post('/chat', async (req, res) => {
       },
       body: JSON.stringify({ assistant_id: OPENAI_ASSISTANT_ID })
     });
-    if (!thrRes.ok) throw new Error(await thrRes.text());
-    const { id: thread_id } = await thrRes.json();
+    if (!thr.ok) throw new Error(await thr.text());
+    const { id: thread_id } = await thr.json();
 
     // 2) post user message
-    const msgRes = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
+    const msg = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${OPENAI_API_KEY}`,
@@ -76,10 +76,10 @@ app.post('/chat', async (req, res) => {
       },
       body: JSON.stringify({ role: 'user', content: message })
     });
-    if (!msgRes.ok) throw new Error(await msgRes.text());
+    if (!msg.ok) throw new Error(await msg.text());
 
     // 3) run assistant
-    const runRes = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs`, {
+    const run = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${OPENAI_API_KEY}`,
@@ -88,101 +88,11 @@ app.post('/chat', async (req, res) => {
       },
       body: JSON.stringify({ assistant_id: OPENAI_ASSISTANT_ID })
     });
-    if (!runRes.ok) throw new Error(await runRes.text());
-    const { id: run_id, status: initStatus } = await runRes.json();
-
-    // 4) poll until done
-    let status = initStatus;
-    while (['queued','in_progress'].includes(status)) {
-      await new Promise(r => setTimeout(r, 1000));
-      const pollRes = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs/${run_id}`, {
-        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER }
-      });
-      if (!pollRes.ok) throw new Error(await pollRes.text());
-      status = (await pollRes.json()).status;
-    }
-
-    // 5) fetch messages & reply
-    const allRes = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
-      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER }
-    });
-    if (!allRes.ok) throw new Error(await allRes.text());
-    const { data: msgs } = await allRes.json();
-    const reply = msgs.reverse().find(m => m.role === 'assistant')?.content || '';
-
-    res.json({ reply });
-  } catch (err) {
-    console.error('Chat error:', err);
-    res.status(500).json({ error: 'Chat failed', details: err.message });
-  }
-});
-
-// — Image analysis — 
-app.post('/analyze-wix-image', async (req, res) => {
-  const { imageUrl, imageBase64, message } = req.body;
-  if (!imageUrl && !imageBase64) {
-    return res.status(400).json({ error: 'Either imageUrl or imageBase64 required' });
-  }
-
-  try {
-    // save image locally and build public URL
-    let finalImageUrl;
-    if (imageBase64) {
-      const buf = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-      const fn = `${Date.now()}.jpg`;
-      fs.writeFileSync(path.join(UPLOAD_DIR, fn), buf);
-      finalImageUrl = `${process.env.SERVER_URL||'https://openai-chatbot-513z.onrender.com'}/uploads/${fn}`;
-    } else {
-      const imgRes = await fetch(imageUrl, {
-        headers: { 'User-Agent':'Mozilla/5.0', Accept:'image/*', Referer:'https://www.man-maid.co.uk' }
-      });
-      if (!imgRes.ok) throw new Error('Remote fetch failed');
-      const buf = await imgRes.buffer();
-      const fn = `${Date.now()}.jpg`;
-      fs.writeFileSync(path.join(UPLOAD_DIR, fn), buf);
-      finalImageUrl = `${process.env.SERVER_URL||'https://openai-chatbot-513z.onrender.com'}/uploads/${fn}`;
-    }
-
-    // 1) create thread
-    const thrRes = await fetch(`${OPENAI_BASE}/threads`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type':'application/json', ...ASSISTANTS_HEADER },
-      body: JSON.stringify({ assistant_id: OPENAI_ASSISTANT_ID })
-    });
-    if (!thrRes.ok) throw new Error(await thrRes.text());
-    const { id: thread_id } = await thrRes.json();
-
-    // 2) post user message with attachment
-    await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type':'application/json', ...ASSISTANTS_HEADER },
-      body: JSON.stringify({
-        role: 'user',
-        content: message || '',
-        attachments: [
-          { type:'image_url', image_url:{ url: finalImageUrl, detail:'high' } }
-        ]
-      })
-    });
-
-    // Peek at what landed
-    const peek = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
-      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER }
-    });
-    const peekJson = await peek.json();
-    console.log('🧐 THREAD MESSAGES SO FAR:', JSON.stringify(peekJson, null, 2));
-
-    // 3) run assistant
-    const runRes = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type':'application/json', ...ASSISTANTS_HEADER },
-      body: JSON.stringify({ assistant_id: OPENAI_ASSISTANT_ID })
-    });
-    if (!runRes.ok) throw new Error(await runRes.text());
-    const { id: run_id, status: initStatus } = await runRes.json();
+    if (!run.ok) throw new Error(await run.text());
+    const { id: run_id, status: st0 } = await run.json();
 
     // 4) poll
-    let status = initStatus;
+    let status = st0;
     while (['queued','in_progress'].includes(status)) {
       await new Promise(r => setTimeout(r, 1000));
       const p = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs/${run_id}`, {
@@ -192,25 +102,119 @@ app.post('/analyze-wix-image', async (req, res) => {
       status = (await p.json()).status;
     }
 
-    // 5) fetch and return reply
-    const allRes = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
+    // 5) fetch reply
+    const all = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
       headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER }
     });
-    if (!allRes.ok) throw new Error(await allRes.text());
-    const { data: msgs } = await allRes.json();
+    if (!all.ok) throw new Error(await all.text());
+    const { data: msgs } = await all.json();
+    const reply = msgs.reverse().find(m => m.role==='assistant')?.content || '';
+
+    res.json({ reply });
+  } catch (err) {
+    console.error('Chat error:', err);
+    res.status(500).json({ error: 'Chat failed', details: err.message });
+  }
+});
+
+// — Image analysis via your custom Assistant — 
+app.post('/analyze-wix-image', async (req, res) => {
+  const { imageUrl, imageBase64, message } = req.body;
+  if (!imageUrl && !imageBase64) {
+    return res.status(400).json({ error: 'Either imageUrl or imageBase64 is required' });
+  }
+
+  try {
+    // 1) save image and get public URL
+    let finalImageUrl;
+    if (imageBase64) {
+      const buf = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+      const fn = `${Date.now()}.jpg`;
+      fs.writeFileSync(path.join(UPLOAD_DIR, fn), buf);
+      finalImageUrl = `${process.env.SERVER_URL||'https://openai-chatbot-513z.onrender.com'}/uploads/${fn}`;
+    } else {
+      const r = await fetch(imageUrl, { headers: {
+        'User-Agent':'Mozilla/5.0','Accept':'image/*','Referer':'https://www.man-maid.co.uk'
+      }});
+      if (!r.ok) throw new Error('Remote fetch failed');
+      const buf = await r.buffer();
+      const fn = `${Date.now()}.jpg`;
+      fs.writeFileSync(path.join(UPLOAD_DIR, fn), buf);
+      finalImageUrl = `${process.env.SERVER_URL||'https://openai-chatbot-513z.onrender.com'}/uploads/${fn}`;
+    }
+
+    // 2) create thread
+    const thr = await fetch(`${OPENAI_BASE}/threads`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type':  'application/json',
+        ...ASSISTANTS_HEADER
+      },
+      body: JSON.stringify({ assistant_id: OPENAI_ASSISTANT_ID })
+    });
+    if (!thr.ok) throw new Error(await thr.text());
+    const { id: thread_id } = await thr.json();
+
+    // 3) post user message + attachment
+    const post = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type':  'application/json',
+        ...ASSISTANTS_HEADER
+      },
+      body: JSON.stringify({
+        role:        'user',
+        content:     message || '',
+        attachments: [{ type:'image_url', image_url:{ url:finalImageUrl, detail:'high' }}]
+      })
+    });
+    if (!post.ok) throw new Error(await post.text());
+
+    // 4) run assistant
+    const run = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type':  'application/json',
+        ...ASSISTANTS_HEADER
+      },
+      body: JSON.stringify({ assistant_id: OPENAI_ASSISTANT_ID })
+    });
+    if (!run.ok) throw new Error(await run.text());
+    const { id: run_id, status: st1 } = await run.json();
+
+    // 5) poll
+    let status = st1;
+    while (['queued','in_progress'].includes(status)) {
+      await new Promise(r => setTimeout(r, 1000));
+      const p = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs/${run_id}`, {
+        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER }
+      });
+      if (!p.ok) throw new Error(await p.text());
+      status = (await p.json()).status;
+    }
+
+    // 6) fetch reply
+    const all = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER }
+    });
+    if (!all.ok) throw new Error(await all.text());
+    const { data: msgs } = await all.json();
     const reply = msgs.reverse().find(m => m.role==='assistant')?.content || '';
 
     res.json({ reply });
   } catch (err) {
     console.error('Image analysis error:', err);
-    res.status(500).json({ error:'Image analysis failed', details:err.message });
+    res.status(500).json({ error: 'Image analysis failed', details: err.message });
   }
 });
 
-// fallback error handler
+// global error handler
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
-  res.status(500).json({ error:'Internal error', details:err.message });
+  res.status(500).json({ error: 'Internal error', details: err.message });
 });
 
 // start server
