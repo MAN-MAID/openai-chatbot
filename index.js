@@ -14,8 +14,7 @@ const OPENAI_ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
 const ASSISTANTS_HEADER   = { 'OpenAI-Beta': 'assistants=v2' };
 const OPENAI_BASE         = 'https://api.openai.com/v1';
 
-//— manual CORS handler —//
-// allow every origin (or you can echo req.headers.origin)
+// — manual CORS handler — //
 app.use((req, res, next) => {
   const origin = req.headers.origin || '*';
   res.setHeader('Access-Control-Allow-Origin',  origin);
@@ -26,7 +25,9 @@ app.use((req, res, next) => {
 });
 
 // ensure upload dir exists
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
 
 // body parsing
 app.use(express.json({ limit: '50mb' }));
@@ -53,7 +54,7 @@ app.post('/chat', async (req, res) => {
 
   try {
     // 1) create thread
-    const thr = await fetch(`${OPENAI_BASE}/threads`, {
+    const thrRes = await fetch(`${OPENAI_BASE}/threads`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${OPENAI_API_KEY}`,
@@ -62,39 +63,58 @@ app.post('/chat', async (req, res) => {
       },
       body: JSON.stringify({ assistant_id: OPENAI_ASSISTANT_ID })
     });
-    if (!thr.ok) throw new Error(await thr.text());
-    const { id: thread_id } = await thr.json();
+    if (!thrRes.ok) throw new Error(await thrRes.text());
+    const { id: thread_id } = await thrRes.json();
 
-    // 2) post user msg
-    await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
+    // 2) post user message
+    const msgRes = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
       method: 'POST',
-      headers: thr.headers,
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type':  'application/json',
+        ...ASSISTANTS_HEADER
+      },
       body: JSON.stringify({ role: 'user', content: message })
-    }).then(r => { if (!r.ok) throw new Error(await r.text()) });
+    });
+    if (!msgRes.ok) throw new Error(await msgRes.text());
 
     // 3) run assistant
-    const run = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs`, {
+    const runRes = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs`, {
       method: 'POST',
-      headers: thr.headers,
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type':  'application/json',
+        ...ASSISTANTS_HEADER
+      },
       body: JSON.stringify({ assistant_id: OPENAI_ASSISTANT_ID })
     });
-    if (!run.ok) throw new Error(await run.text());
-    const { id: run_id, status: st0 } = await run.json();
+    if (!runRes.ok) throw new Error(await runRes.text());
+    const { id: run_id, status: initStatus } = await runRes.json();
 
-    // 4) poll
-    let status = st0;
-    while (['queued','in_progress'].includes(status)) {
+    // 4) poll until done
+    let status = initStatus;
+    while (status === 'queued' || status === 'in_progress') {
       await new Promise(r => setTimeout(r, 1000));
-      const p = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs/${run_id}`, { headers: thr.headers });
-      if (!p.ok) throw new Error(await p.text());
-      status = (await p.json()).status;
+      const pollRes = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs/${run_id}`, {
+        headers: {
+          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          ...ASSISTANTS_HEADER
+        }
+      });
+      if (!pollRes.ok) throw new Error(await pollRes.text());
+      status = (await pollRes.json()).status;
     }
 
-    // 5) fetch messages
-    const all = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, { headers: thr.headers });
-    if (!all.ok) throw new Error(await all.text());
-    const { data: msgs } = await all.json();
-    const reply = msgs.reverse().find(m => m.role==='assistant')?.content || '';
+    // 5) fetch messages & return assistant’s reply
+    const allRes = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        ...ASSISTANTS_HEADER
+      }
+    });
+    if (!allRes.ok) throw new Error(await allRes.text());
+    const { data: msgs } = await allRes.json();
+    const reply = msgs.reverse().find(m => m.role === 'assistant')?.content || '';
 
     res.json({ reply });
   } catch (err) {
@@ -103,7 +123,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// — Image analysis (unchanged logic) — 
+// — Image analysis — 
 app.post('/analyze-wix-image', async (req, res) => {
   const { imageUrl, imageBase64, message } = req.body;
   if (!imageUrl && !imageBase64) {
@@ -111,26 +131,29 @@ app.post('/analyze-wix-image', async (req, res) => {
   }
 
   try {
-    // save incoming image
     let finalImageUrl;
+
     if (imageBase64) {
-      const b = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+      const buf = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
       const fn = `${Date.now()}.jpg`;
-      fs.writeFileSync(path.join(UPLOAD_DIR, fn), b);
+      fs.writeFileSync(path.join(UPLOAD_DIR, fn), buf);
       finalImageUrl = `${process.env.SERVER_URL || 'https://openai-chatbot-513z.onrender.com'}/uploads/${fn}`;
     } else {
-      const r = await fetch(imageUrl, { headers: {
-        'User-Agent':'Mozilla/5.0','Accept':'image/*','Referer':'https://www.man-maid.co.uk'
-      }});
-      if (!r.ok) throw new Error('Remote fetch failed');
-      const buf = await r.buffer();
+      const imgRes = await fetch(imageUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Accept':     'image/*',
+          'Referer':    'https://www.man-maid.co.uk'
+        }
+      });
+      if (!imgRes.ok) throw new Error('Remote fetch failed');
+      const buf = await imgRes.buffer();
       const fn = `${Date.now()}.jpg`;
       fs.writeFileSync(path.join(UPLOAD_DIR, fn), buf);
       finalImageUrl = `${process.env.SERVER_URL || 'https://openai-chatbot-513z.onrender.com'}/uploads/${fn}`;
     }
 
-    // call vision
-    const vis = await fetch(`${OPENAI_BASE}/chat/completions`, {
+    const visionRes = await fetch(`${OPENAI_BASE}/chat/completions`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${OPENAI_API_KEY}`,
@@ -139,30 +162,30 @@ app.post('/analyze-wix-image', async (req, res) => {
       body: JSON.stringify({
         model: 'gpt-4o',
         messages: [
-          { role: 'user',    content: message||'What do you see?' },
-          { type: 'image_url', image_url: { url: finalImageUrl, detail:'high' } }
+          { role: 'user', content: message || 'What do you see?' },
+          { type: 'image_url', image_url: { url: finalImageUrl, detail: 'high' } }
         ],
         max_tokens: 500
       })
     });
-    if (!vis.ok) throw new Error(await vis.text());
-    const j = await vis.json();
+    if (!visionRes.ok) throw new Error(await visionRes.text());
+    const j = await visionRes.json();
     res.json({ reply: j.choices[0].message.content });
   } catch (err) {
-    console.error('Image error:', err);
+    console.error('Image analysis error:', err);
     res.status(500).json({ error: 'Image analysis failed', details: err.message });
   }
 });
 
 // fallback error handler
-app.use((e,req,res,_)=>{
-  console.error('Unhandled:',e);
-  res.status(500).json({ error:'Internal error', details:e.message });
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal error', details: err.message });
 });
 
-// start
-app.listen(PORT, ()=> {
+// start server
+app.listen(PORT, () => {
   console.log(`🚀 Server on port ${PORT}`);
-  if (!OPENAI_API_KEY)      console.warn('⚠️ MISSING OPENAI_API_KEY');
-  if (!OPENAI_ASSISTANT_ID) console.warn('⚠️ MISSING OPENAI_ASSISTANT_ID');
+  if (!OPENAI_API_KEY)      console.warn('⚠️ OPENAI_API_KEY missing!');
+  if (!OPENAI_ASSISTANT_ID) console.warn('⚠️ OPENAI_ASSISTANT_ID missing!');
 });
