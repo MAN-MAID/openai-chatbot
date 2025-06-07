@@ -1,3 +1,4 @@
+console.log('📥 RAW BODY:', JSON.stringify(req.body, null,2));
 import { mediaManager } from 'wix-media-backend';
 import { fetch } from 'wix-fetch';
 
