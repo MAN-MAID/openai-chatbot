@@ -9,31 +9,25 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const UPLOAD_DIR = '/tmp/uploads';
 
-// Ensure upload dir exists
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
+const SERVER_URL = process.env.SERVER_URL || `http://localhost:${PORT}`;
 
-// Middleware
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
-
-// Health check
 app.get('/', (req, res) => {
   res.json({
-    status: 'OpenAI Chatbot API is running',
+    status: 'OpenAI Assistant API is running',
     endpoints: {
-      chat: '/chat',
       imageAnalysis: '/analyze-wix-image'
     }
   });
 });
 
-// Static file serving for uploaded images
 app.get('/uploads/:filename', (req, res) => {
   const filePath = path.join(UPLOAD_DIR, req.params.filename);
   if (fs.existsSync(filePath)) {
@@ -43,138 +37,94 @@ app.get('/uploads/:filename', (req, res) => {
   }
 });
 
-// Chat endpoint
-app.post('/chat', async (req, res) => {
-  const { message } = req.body;
-
-  if (!message) return res.status(400).json({ error: 'Message is required' });
-
-  try {
-    const response = await fetch(OPENAI_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: 'You are a helpful assistant.' },
-          { role: 'user', content: message }
-        ],
-        temperature: 0.7,
-        max_tokens: 500
-      })
-    });
-
-    if (!response.ok) throw new Error(await response.text());
-    const data = await response.json();
-    const reply = data.choices[0].message.content;
-
-    res.json({ reply });
-  } catch (error) {
-    console.error('Chat error:', error);
-    res.status(500).json({ error: 'Failed to process chat request', details: error.message });
-  }
-});
-
-// Image analysis
 app.post('/analyze-wix-image', async (req, res) => {
-  const { imageUrl, imageBase64, message } = req.body;
-  console.log('Image analysis request', { imageUrl: !!imageUrl, imageBase64: !!imageBase64, message });
-
-  if (!imageUrl && !imageBase64) {
-    return res.status(400).json({ error: 'Either imageUrl or imageBase64 is required' });
-  }
+  const { imageBase64, imageUrl, message } = req.body;
+  let finalImageUrl;
 
   try {
-    let finalImageUrl;
-
-    // If base64 is provided, save and host it
     if (imageBase64) {
       const base64Clean = imageBase64.replace(/^data:image\/\w+;base64,/, '');
       const buffer = Buffer.from(base64Clean, 'base64');
       const filename = `${Date.now()}.jpg`;
       const filePath = path.join(UPLOAD_DIR, filename);
       fs.writeFileSync(filePath, buffer);
-
-      const serverUrl = process.env.SERVER_URL || `https://openai-chatbot-513z.onrender.com`;
-      finalImageUrl = `${serverUrl}/uploads/${filename}`;
-
-      console.log('Saved and served base64 image as:', finalImageUrl);
+      finalImageUrl = `${SERVER_URL}/uploads/${filename}`;
+    } else if (imageUrl) {
+      const imageResponse = await fetch(imageUrl);
+      if (!imageResponse.ok) throw new Error('Failed to fetch image URL');
+      const buffer = await imageResponse.buffer();
+      const filename = `${Date.now()}.jpg`;
+      const filePath = path.join(UPLOAD_DIR, filename);
+      fs.writeFileSync(filePath, buffer);
+      finalImageUrl = `${SERVER_URL}/uploads/${filename}`;
+    } else {
+      return res.status(400).json({ error: 'Image is required.' });
     }
 
-    // If image URL is provided
-    else if (imageUrl) {
-      try {
-        const imageResponse = await fetch(imageUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0',
-            'Accept': 'image/*',
-            'Referer': 'https://www.man-maid.co.uk'
-          }
-        });
-
-        if (!imageResponse.ok) throw new Error('Image URL fetch failed');
-
-        const buffer = await imageResponse.buffer();
-        const filename = `${Date.now()}.jpg`;
-        const filePath = path.join(UPLOAD_DIR, filename);
-        fs.writeFileSync(filePath, buffer);
-
-        const serverUrl = process.env.SERVER_URL || `https://openai-chatbot-513z.onrender.com`;
-        finalImageUrl = `${serverUrl}/uploads/${filename}`;
-
-        console.log('Fetched and saved image URL as:', finalImageUrl);
-      } catch (err) {
-        return res.status(400).json({ error: 'Could not fetch image URL', details: err.message });
+    // 1. Create thread
+    const threadRes = await fetch('https://api.openai.com/v1/threads', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
       }
-    }
+    });
+    const thread = await threadRes.json();
 
-    // Call OpenAI Vision API
-    const visionResponse = await fetch(OPENAI_API_URL, {
+    // 2. Add user message
+    await fetch(`https://api.openai.com/v1/threads/${thread.id}/messages`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${OPENAI_API_KEY}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: message || 'What do you see in this image?' },
-              { type: 'image_url', image_url: { url: finalImageUrl, detail: 'high' } }
-            ]
-          }
-        ],
-        max_tokens: 500
+        role: 'user',
+        content: [
+          { type: 'text', text: message || 'What do you see in this image?' },
+          { type: 'image_url', image_url: { url: finalImageUrl, detail: 'high' } }
+        ]
       })
     });
 
-    if (!visionResponse.ok) throw new Error(await visionResponse.text());
+    // 3. Run assistant
+    const runRes = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ assistant_id: OPENAI_ASSISTANT_ID })
+    });
+    const run = await runRes.json();
 
-    const visionData = await visionResponse.json();
-    const reply = visionData.choices[0].message.content;
+    // 4. Poll for completion
+    let runStatus = run.status;
+    while (runStatus !== 'completed' && runStatus !== 'failed') {
+      await new Promise(r => setTimeout(r, 1500));
+      const pollRes = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs/${run.id}`, {
+        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` }
+      });
+      const pollData = await pollRes.json();
+      runStatus = pollData.status;
+    }
 
-    res.json({ reply });
+    // 5. Get messages
+    const messagesRes = await fetch(`https://api.openai.com/v1/threads/${thread.id}/messages`, {
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` }
+    });
+    const messages = await messagesRes.json();
+    const lastMessage = messages.data.find(m => m.role === 'assistant');
+
+    res.json({ reply: lastMessage?.content[0]?.text?.value || 'No reply received.' });
   } catch (error) {
-    console.error('Image analysis error:', error);
-    res.status(500).json({ error: 'Image analysis failed', details: error.message });
+    console.error('Assistant error:', error);
+    res.status(500).json({ error: 'Failed to analyze image', details: error.message });
   }
-});
-
-// Fallback error handler
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ error: 'Internal server error', details: err.message });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server live on port ${PORT}`);
-  console.log(`🔗 Hosted image uploads at /uploads`);
-  if (!OPENAI_API_KEY) {
-    console.warn('⚠️  OPENAI_API_KEY is missing!');
-  }
+  console.log(`🚀 Server running on port ${PORT}`);
+  if (!OPENAI_API_KEY) console.warn('⚠️ Missing OPENAI_API_KEY');
+  if (!OPENAI_ASSISTANT_ID) console.warn('⚠️ Missing OPENAI_ASSISTANT_ID');
 });
