@@ -36,14 +36,34 @@ app.get('/uploads/:f', (req,res) => {
   fs.existsSync(p) ? res.sendFile(p) : res.sendStatus(404);
 });
 
+// helper
+async function callAssistant(messages) {
+  const resp = await fetch(API_URL, {
+    method:'POST',
+    headers:{
+      'Authorization':`Bearer ${OPENAI_API_KEY}`,
+      'Content-Type':'application/json',
+      'OpenAI-Beta':'assistants=v2'
+    },
+    body: JSON.stringify({
+      model:         'gpt-4o',               // ← **added**
+      assistant_id:  OPENAI_ASSISTANT_ID,
+      messages,
+      temperature:   0.7,
+      max_tokens:    500
+    })
+  });
+  if (!resp.ok) throw new Error(await resp.text());
+  const { choices } = await resp.json();
+  return choices[0].message.content;
+}
+
 // CHAT ONLY
 app.post('/chat', async (req,res) => {
   const { message } = req.body;
   if (!message) return res.status(400).json({ error:'no message' });
   try {
-    const reply = await callAssistant([
-      { role:'user', content: message }
-    ]);
+    const reply = await callAssistant([{ role:'user', content: message }]);
     res.json({ reply });
   } catch(err) {
     console.error(err);
@@ -59,27 +79,27 @@ app.post('/analyze-wix-image', async (req,res) => {
   }
 
   try {
-    // 1) save or proxy image
+    // save or proxy image
     let publicUrl;
     if (imageBase64) {
       const data = imageBase64.split(',')[1];
-      const buf  = Buffer.from(data, 'base64');
+      const buf  = Buffer.from(data,'base64');
       const fn   = `${Date.now()}.jpg`;
       fs.writeFileSync(path.join(UPLOAD_DIR,fn), buf);
       publicUrl = `${process.env.SERVER_URL}/uploads/${fn}`;
     } else {
-      const resp = await fetch(imageUrl);
-      if (!resp.ok) throw new Error('fetch failed');
-      const buf = await resp.buffer();
+      const r = await fetch(imageUrl);
+      if (!r.ok) throw new Error('fetch failed');
+      const buf = await r.buffer();
       const fn  = `${Date.now()}.jpg`;
       fs.writeFileSync(path.join(UPLOAD_DIR,fn), buf);
       publicUrl = `${process.env.SERVER_URL}/uploads/${fn}`;
     }
 
-    // 2) send both text and image as messages
+    // send text + image inline
     const msgs = [
       { role:'user', content: message || 'What do you see here?' },
-      { role:'user', content: `<image>${publicUrl}</image>` }
+      { role:'user', content:`<image>${publicUrl}</image>` }
     ];
     const reply = await callAssistant(msgs);
     res.json({ reply });
@@ -89,26 +109,5 @@ app.post('/analyze-wix-image', async (req,res) => {
   }
 });
 
-// helper
-async function callAssistant(messages) {
-  const resp = await fetch(API_URL, {
-    method:'POST',
-    headers: {
-      'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      'Content-Type':  'application/json',
-      'OpenAI-Beta':   'assistants=v2'
-    },
-    body: JSON.stringify({
-      assistant_id: OPENAI_ASSISTANT_ID,
-      messages,
-      temperature: 0.7,
-      max_tokens: 500
-    })
-  });
-  if (!resp.ok) throw new Error(await resp.text());
-  const { choices } = await resp.json();
-  return choices[0].message.content;
-}
-
 // start
-app.listen(PORT, () => console.log(`🚀 live on ${PORT}`));
+app.listen(PORT, ()=>console.log(`🚀 live on ${PORT}`));
