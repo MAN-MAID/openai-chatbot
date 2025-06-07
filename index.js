@@ -127,28 +127,6 @@ app.post("/process-wix-file", async (req, res) => {
       }
     }
     
-    // Approach 2: If direct URLs fail, try using a proxy service
-    if (!imageBuffer) {
-      console.log("Direct URLs failed, trying proxy approach...");
-      
-      try {
-        // Try using a CORS proxy (only for testing - you might need a different approach for production)
-        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(urlPatterns[0])}`;
-        const proxyResponse = await fetch(proxyUrl);
-        
-        if (proxyResponse.ok) {
-          const proxyData = await proxyResponse.json();
-          if (proxyData.contents) {
-            // This might be base64 or raw data depending on the proxy
-            console.log("Got proxy response, attempting to process...");
-            // This approach might need more work depending on the proxy response format
-          }
-        }
-      } catch (proxyError) {
-        console.log("Proxy approach failed:", proxyError.message);
-      }
-    }
-    
     // If we got image data, convert to base64
     if (imageBuffer && imageBuffer.byteLength > 0) {
       const base64 = Buffer.from(imageBuffer).toString('base64');
@@ -185,7 +163,65 @@ app.post("/process-wix-file", async (req, res) => {
   }
 });
 
-// Helper endpoint to fetch Wix images
+// New endpoint to process image URLs (like imgur)
+app.post("/process-image-url", async (req, res) => {
+  try {
+    console.log("=== IMAGE URL PROCESSING REQUEST ===");
+    const { imageUrl } = req.body;
+    console.log("Image URL:", imageUrl);
+    
+    if (!imageUrl) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Image URL required" 
+      });
+    }
+    
+    // Fetch the image from the URL
+    const response = await fetch(imageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'image/*,*/*;q=0.8'
+      },
+      timeout: 15000
+    });
+    
+    console.log("Response status:", response.status, "Content-Type:", response.headers.get('content-type'));
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
+    }
+    
+    const imageBuffer = await response.arrayBuffer();
+    const mimeType = response.headers.get('content-type') || 'image/jpeg';
+    
+    console.log("✅ Successfully fetched image, size:", imageBuffer.byteLength, "bytes");
+    
+    // Convert to base64
+    const base64 = Buffer.from(imageBuffer).toString('base64');
+    const dataUrl = `data:${mimeType};base64,${base64}`;
+    
+    console.log("✅ Successfully converted to base64, total length:", dataUrl.length);
+    
+    return res.json({
+      success: true,
+      base64Data: dataUrl,
+      mimeType: mimeType,
+      size: imageBuffer.byteLength
+    });
+    
+  } catch (error) {
+    console.error("=== IMAGE URL PROCESSING ERROR ===");
+    console.error("Error:", error.message);
+    
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Helper endpoint to fetch Wix images (legacy)
 app.post("/fetch-wix-image", async (req, res) => {
   try {
     const { wixUrl, fileName } = req.body;
@@ -391,7 +427,7 @@ app.post("/chat", async (req, res) => {
     const tid = await ensureThread();
 
     // Handle non-image files or fallback
-    if (fileData && !fileData.type.startsWith('image/')) {
+    if (fileData && !fileData.type?.startsWith('image/')) {
       console.log("Processing non-image file with Assistant API");
       
       try {
@@ -547,4 +583,5 @@ app.listen(port, () => {
   console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🤖 Assistant ID: ${assistantId ? 'Set' : 'Missing'}`);
   console.log(`🔑 OpenAI API Key: ${process.env.OPENAI_API_KEY ? 'Set' : 'Missing'}`);
+  console.log(`📸 Image processing endpoints: /process-wix-file, /process-image-url`);
 });
