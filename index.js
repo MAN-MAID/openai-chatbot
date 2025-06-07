@@ -2,7 +2,7 @@
 const express = require('express');
 const fetch   = require('node-fetch');
 const fs      = require('fs');
-const path    =('path');
+const path    = require('path');
 require('dotenv').config();
 
 // ─── CONFIG ─────────────────────────────────────────────────────
