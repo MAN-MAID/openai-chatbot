@@ -15,6 +15,15 @@ const SERVER_URL = process.env.SERVER_URL || `http://localhost:${PORT}`;
 
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
+app.options('*', cors({
+  origin: [
+    'https://www.man-maid.co.uk',
+    'https://www.man-maid-co-uk.filesusr.com'
+  ],
+  methods: ['GET', 'POST'],
+  credentials: false
+}));
+
 app.use(cors({
   origin: [
     'https://www.man-maid.co.uk',
