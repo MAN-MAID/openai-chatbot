@@ -93,24 +93,19 @@ app.post('/chat', async (req, res) => {
 
     // 4) poll until done
     let status = initStatus;
-    while (status === 'queued' || status === 'in_progress') {
+    while (['queued','in_progress'].includes(status)) {
       await new Promise(r => setTimeout(r, 1000));
-      const pollRes = await fetch(`${OPENAI_BASE}/threads/${thread_id}/runs/${run_id}`, {
-        headers: {
-          'Authorization': `Bearer ${OPENAI_API_KEY}`,
-          ...ASSISTANTS_HEADER
-        }
-      });
+      const pollRes = await fetch(
+        `${OPENAI_BASE}/threads/${thread_id}/runs/${run_id}`,
+        { headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER } }
+      );
       if (!pollRes.ok) throw new Error(await pollRes.text());
       status = (await pollRes.json()).status;
     }
 
-    // 5) fetch messages & return assistant’s reply
+    // 5) fetch messages & reply
     const allRes = await fetch(`${OPENAI_BASE}/threads/${thread_id}/messages`, {
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        ...ASSISTANTS_HEADER
-      }
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, ...ASSISTANTS_HEADER }
     });
     if (!allRes.ok) throw new Error(await allRes.text());
     const { data: msgs } = await allRes.json();
@@ -131,8 +126,8 @@ app.post('/analyze-wix-image', async (req, res) => {
   }
 
   try {
+    // save the image locally and get a public URL
     let finalImageUrl;
-
     if (imageBase64) {
       const buf = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
       const fn = `${Date.now()}.jpg`;
@@ -140,11 +135,7 @@ app.post('/analyze-wix-image', async (req, res) => {
       finalImageUrl = `${process.env.SERVER_URL || 'https://openai-chatbot-513z.onrender.com'}/uploads/${fn}`;
     } else {
       const imgRes = await fetch(imageUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0',
-          'Accept':     'image/*',
-          'Referer':    'https://www.man-maid.co.uk'
-        }
+        headers: { 'User-Agent':'Mozilla/5.0', Accept:'image/*', Referer:'https://www.man-maid.co.uk' }
       });
       if (!imgRes.ok) throw new Error('Remote fetch failed');
       const buf = await imgRes.buffer();
@@ -153,6 +144,7 @@ app.post('/analyze-wix-image', async (req, res) => {
       finalImageUrl = `${process.env.SERVER_URL || 'https://openai-chatbot-513z.onrender.com'}/uploads/${fn}`;
     }
 
+    // single user message with both text and image attachment
     const visionRes = await fetch(`${OPENAI_BASE}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -162,15 +154,20 @@ app.post('/analyze-wix-image', async (req, res) => {
       body: JSON.stringify({
         model: 'gpt-4o',
         messages: [
-          { role: 'user', content: message || 'What do you see?' },
-          { type: 'image_url', image_url: { url: finalImageUrl, detail: 'high' } }
+          {
+            role: 'user',
+            content: [
+              { type: 'text',     text: message || 'What do you see in this image?' },
+              { type: 'image_url', image_url: { url: finalImageUrl, detail: 'high' } }
+            ]
+          }
         ],
         max_tokens: 500
       })
     });
     if (!visionRes.ok) throw new Error(await visionRes.text());
-    const j = await visionRes.json();
-    res.json({ reply: j.choices[0].message.content });
+    const { choices } = await visionRes.json();
+    res.json({ reply: choices[0].message.content });
   } catch (err) {
     console.error('Image analysis error:', err);
     res.status(500).json({ error: 'Image analysis failed', details: err.message });
