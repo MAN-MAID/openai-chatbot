@@ -63,60 +63,86 @@ app.post("/chat", async (req, res) => {
       name: fileData.name,
       type: fileData.type,
       hasData: !!fileData.data,
-      hasWixUrl: !!fileData.wixUrl,
-      dataLength: fileData.data ? fileData.data.length : 0,
-      wixUrl: fileData.wixUrl ? fileData.wixUrl.substring(0, 100) + "..." : "(none)"
+      hasWixFileUrl: !!fileData.wixFileUrl,
+      fallbackMode: fileData.fallbackMode,
+      dataLength: fileData.data ? fileData.data.length : 0
     } : "(none)");
     
     if (!message && !fileData) {
       return res.status(400).json({ error: "Need message or fileData." });
     }
 
-    // Handle images differently - use Chat Completions API for better vision support
-    if (fileData && fileData.type.startsWith('image/')) {
+    // Handle images - prioritize direct base64 data
+    if (fileData && (fileData.type?.startsWith('image/') || fileData.name?.match(/\.(jpg|jpeg|png|gif|webp)$/i))) {
       console.log("Processing image with Chat Completions API");
       
       try {
         let imageUrl;
         
-        // Handle different file data formats
+        // Method 1: Direct base64 data (best case)
         if (fileData.data) {
-          // Base64 data
           imageUrl = fileData.data;
-          console.log("Using base64 image data");
-        } else if (fileData.wixUrl) {
-          // Wix URL - convert to HTTP URL and fetch
-          console.log("Processing Wix URL:", fileData.wixUrl);
+          console.log("Using direct base64 data from frontend");
           
-          // Convert wix:image:// URL to proper HTTP URL
-          let httpUrl;
-          if (fileData.wixUrl && fileData.wixUrl.startsWith('wix:image://')) {
-            // Extract the image path and convert to HTTP
-            const wixPath = fileData.wixUrl.replace('wix:image://', '');
-            httpUrl = `https://static.wixstatic.com/media/${wixPath}`;
-            console.log("Converted to HTTP URL:", httpUrl);
-          } else if (fileData.wixUrl && fileData.wixUrl.startsWith('http')) {
-            // Already an HTTP URL
-            httpUrl = fileData.wixUrl;
+        // Method 2: Wix file URL (fallback)
+        } else if (fileData.wixFileUrl) {
+          console.log("Processing Wix file URL:", fileData.wixFileUrl);
+          
+          const wixUrl = fileData.wixFileUrl;
+          let success = false;
+          
+          if (wixUrl.startsWith('wix:image://')) {
+            const wixPath = wixUrl.replace('wix:image://', '');
+            
+            // Try multiple URL patterns that might work
+            const urlPatterns = [
+              `https://static.wixstatic.com/media/${wixPath}`,
+              `https://images.wixmp.com/${wixPath}`,
+              `https://www.wixstatic.com/media/${wixPath}`
+            ];
+            
+            console.log("Trying URL patterns for Wix media...");
+            
+            for (const testUrl of urlPatterns) {
+              try {
+                console.log("Testing:", testUrl);
+                const response = await fetch(testUrl, {
+                  headers: {
+                    'User-Agent': 'Mozilla/5.0 (compatible; OpenAI-Vision/1.0)',
+                    'Accept': 'image/*',
+                    'Referer': 'https://www.wix.com/'
+                  }
+                });
+                
+                if (response.ok) {
+                  const buffer = await response.arrayBuffer();
+                  const base64 = Buffer.from(buffer).toString('base64');
+                  imageUrl = `data:${fileData.type || 'image/jpeg'};base64,${base64}`;
+                  console.log("✅ Successfully fetched from:", testUrl);
+                  success = true;
+                  break;
+                } else {
+                  console.log("❌ Failed with status:", response.status);
+                }
+              } catch (fetchError) {
+                console.log("❌ Fetch error:", fetchError.message);
+              }
+            }
+            
+            if (!success) {
+              throw new Error("All Wix URL patterns failed - image may not be publicly accessible");
+            }
           } else {
-            throw new Error(`Unsupported Wix URL format: ${fileData.wixUrl || 'undefined'}`);
+            throw new Error("Unsupported Wix URL format");
           }
-          
-          console.log("Fetching image from HTTP URL:", httpUrl);
-          const response = await fetch(httpUrl);
-          if (!response.ok) {
-            throw new Error(`Failed to fetch Wix file: ${response.status}`);
-          }
-          const buffer = await response.arrayBuffer();
-          const base64 = Buffer.from(buffer).toString('base64');
-          imageUrl = `data:${fileData.type};base64,${base64}`;
-          console.log("Successfully converted Wix URL to base64");
         } else {
           throw new Error("No image data or URL provided");
         }
         
+        // Send to OpenAI Vision API
+        console.log("Sending to OpenAI Vision API...");
         const response = await openai.chat.completions.create({
-          model: "gpt-4-vision-preview", // or "gpt-4o" if available
+          model: "gpt-4-vision-preview",
           messages: [
             {
               role: "user",
@@ -138,16 +164,21 @@ app.post("/chat", async (req, res) => {
         });
         
         const reply = response.choices[0].message.content;
-        console.log("Vision API response received");
+        console.log("✅ Vision API response received, length:", reply.length);
         
         return res.json({ 
           reply: reply,
-          method: "vision-api"
+          method: "vision-api",
+          imageProcessed: true
         });
         
       } catch (visionError) {
-        console.error("Vision API error:", visionError);
-        // Fall back to assistant method if vision API fails
+        console.error("❌ Vision API error:", visionError.message);
+        // Don't fall back to assistant - return the error so user knows what happened
+        return res.status(400).json({ 
+          error: `Image processing failed: ${visionError.message}`,
+          suggestion: "Try uploading a different image or send a text message."
+        });
       }
     }
 
