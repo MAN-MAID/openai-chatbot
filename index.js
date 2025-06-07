@@ -1,780 +1,244 @@
-// src/index.js
-import express     from "express";
-import cors        from "cors";
-import dotenv      from "dotenv";
-import { OpenAI }  from "openai";
+const express = require('express');
+const cors = require('cors');
+const fetch = require('node-fetch');
+require('dotenv').config();
 
-dotenv.config();
+const app = express();
+const PORT = process.env.PORT || 10000;
 
-const app          = express();
-const port         = process.env.PORT || 3000;
-const openai       = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const assistantId  = process.env.ASSISTANT_ID;
-let   threadId     = null;
-
-// Ensure we have a conversation thread open
-async function ensureThread() {
-  if (!threadId) {
-    const t = await openai.beta.threads.create();
-    threadId = t.id;
-    console.log("Created thread:", threadId);
-  }
-  return threadId;
-}
-
-// Helper function to convert base64 to buffer
-function base64ToBuffer(base64String) {
-  // Remove data URL prefix if present (e.g., "data:image/jpeg;base64,")
-  const base64Data = base64String.includes(',') 
-    ? base64String.split(',')[1] 
-    : base64String;
-  
-  return Buffer.from(base64Data, 'base64');
-}
-
-// Helper function to get file extension from MIME type
-function getFileExtension(mimeType) {
-  const mimeToExt = {
-    'image/jpeg': 'jpg',
-    'image/jpg': 'jpg',
-    'image/png': 'png',
-    'image/gif': 'gif',
-    'image/webp': 'webp',
-    'application/pdf': 'pdf',
-    'text/plain': 'txt',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-    'application/msword': 'doc',
-    'application/vnd.ms-excel': 'xls',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx'
-  };
-  
-  return mimeToExt[mimeType] || 'bin';
-}
-
+// Middleware
 app.use(cors());
-app.use(express.json({ limit: "100mb" })); // Increased limit for large base64 images
-app.use(express.urlencoded({ limit: "100mb", extended: true }));
+app.use(express.json({ limit: '50mb' })); // Increase limit for base64 images
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// New endpoint to analyze Wix CMS images
-app.post("/analyze-wix-image", async (req, res) => {
-  try {
-    console.log("=== WIX CMS IMAGE ANALYSIS REQUEST ===");
-    const { imageUrl, message } = req.body;
-    console.log("Image URL:", imageUrl);
-    console.log("Message:", message);
-    
-    if (!imageUrl) {
-      return res.status(400).json({ error: "Image URL required" });
-    }
-    
-    let imageData = null;
-    
-    // Enhanced Wix URL processing
-    if (imageUrl.startsWith('wix:image://')) {
-      console.log("Processing Wix image URL...");
-      
-      // Extract the path and try multiple URL patterns
-      const wixPath = imageUrl.replace('wix:image://', '');
-      console.log("Wix path:", wixPath);
-      
-      // Split path to get components
-      const pathParts = wixPath.split('/');
-      if (pathParts.length >= 2) {
-        const mediaId = pathParts[0]; // e.g., "v1/2161b9_xxxxx~mv2.jpg"
-        const filename = pathParts[1].split('#')[0]; // Remove any URL parameters
-        
-        console.log("Media ID:", mediaId);
-        console.log("Filename:", filename);
-        
-        // Try comprehensive URL patterns
-        const urlPatterns = [
-          // Standard patterns
-          `https://static.wixstatic.com/media/${wixPath}`,
-          `https://static.wixstatic.com/media/${mediaId}`,
-          `https://static.wixstatic.com/media/${mediaId}/${filename}`,
-          
-          // Alternative domains
-          `https://images.wixmp.com/${wixPath}`,
-          `https://images.wixmp.com/${mediaId}`,
-          `https://www.wixstatic.com/media/${wixPath}`,
-          
-          // Try without version prefix
-          `https://static.wixstatic.com/media/${wixPath.replace('v1/', '')}`,
-          
-          // Try direct file access
-          `https://static.wixstatic.com/media/${mediaId.replace('~mv2.jpg', '.jpg')}`,
-          
-          // Try thumbnail versions (sometimes more accessible)
-          `https://static.wixstatic.com/media/${mediaId}/v1/crop/x_0,y_0,w_1500,h_1300/${filename}`,
-          `https://static.wixstatic.com/media/${mediaId}/v1/fill/w_500,h_400/${filename}`
-        ];
-        
-        console.log("Trying", urlPatterns.length, "URL patterns...");
-        
-        for (let i = 0; i < urlPatterns.length; i++) {
-          const testUrl = urlPatterns[i];
-          console.log(`Testing URL ${i + 1}:`, testUrl.substring(0, 100) + "...");
-          
-          try {
-            const response = await fetch(testUrl, {
-              headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'image/webp,image/apng,image/jpeg,image/png,image/*,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Referer': 'https://www.wix.com/',
-                'Origin': 'https://www.wix.com',
-                'Sec-Fetch-Dest': 'image',
-                'Sec-Fetch-Mode': 'cors',
-                'Sec-Fetch-Site': 'cross-site',
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache'
-              },
-              timeout: 10000
-            });
-            
-            console.log(`Response ${i + 1}:`, response.status, response.headers.get('content-type'));
-            
-            if (response.ok) {
-              const buffer = await response.arrayBuffer();
-              if (buffer.byteLength > 0) {
-                const base64 = Buffer.from(buffer).toString('base64');
-                const mimeType = response.headers.get('content-type') || 'image/jpeg';
-                imageData = `data:${mimeType};base64,${base64}`;
-                console.log("✅ Successfully fetched image from URL", i + 1, "- Size:", buffer.byteLength, "bytes");
-                break;
-              }
-            }
-          } catch (fetchError) {
-            console.log(`❌ URL ${i + 1} failed:`, fetchError.message);
-          }
-        }
-      }
-    } else if (imageUrl.startsWith('http')) {
-      // Direct HTTP URL
-      try {
-        console.log("Trying direct HTTP access...");
-        const response = await fetch(imageUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; OpenAI-ImageBot/1.0)',
-            'Accept': 'image/*'
-          }
-        });
-        
-        if (response.ok) {
-          const buffer = await response.arrayBuffer();
-          const base64 = Buffer.from(buffer).toString('base64');
-          const mimeType = response.headers.get('content-type') || 'image/jpeg';
-          imageData = `data:${mimeType};base64,${base64}`;
-          console.log("✅ Direct HTTP access successful");
-        }
-      } catch (directError) {
-        console.log("❌ Direct HTTP failed:", directError.message);
-      }
-    }
-    
-    if (!imageData) {
-      console.log("❌ Could not access image from any URL pattern");
-      
-      // Enhanced fallback response
-      const fallbackResponse = await openai.chat.completions.create({
-        model: "gpt-4",
-        messages: [
-          {
-            role: "user",
-            content: `A user uploaded an image to analyze but I cannot access it directly due to Wix's security restrictions. The user asked: "${message}". 
-
-Please provide a helpful response that:
-1. Acknowledges they uploaded an image
-2. Explains that while you can't see this specific image, you can help in other ways
-3. Offers to help them describe what they're looking for or answer questions about images in general
-4. Suggests they could describe the image to you instead
-
-Be friendly and helpful, not apologetic.`
-          }
-        ],
-        max_tokens: 300
-      });
-      
-      return res.json({
-        reply: fallbackResponse.choices[0].message.content,
-        imageProcessed: false,
-        note: "Image could not be accessed due to Wix security restrictions"
-      });
-    }
-    
-    // SUCCESS! Send to OpenAI Vision API
-    console.log("🎉 SUCCESS! Sending to OpenAI Vision API...");
-    const response = await openai.chat.completions.create({
-      model: "gpt-4-vision-preview",
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: message || "Please analyze this image and describe what you see in detail."
-            },
-            {
-              type: "image_url",
-              image_url: {
-                url: imageData
-              }
-            }
-          ]
-        }
-      ],
-      max_tokens: 1000
-    });
-    
-    const reply = response.choices[0].message.content;
-    console.log("🎉 Vision API analysis complete! Reply length:", reply.length);
-    
-    res.json({
-      reply: reply,
-      imageProcessed: true,
-      method: "wix-vision-success"
-    });
-    
-  } catch (error) {
-    console.error("=== WIX CMS IMAGE ANALYSIS ERROR ===");
-    console.error("Error:", error.message);
-    console.error("Stack:", error.stack);
-    
-    res.status(500).json({
-      error: error.message,
-      imageProcessed: false
-    });
-  }
-});
-
-// New endpoint to process Wix files
-app.post("/process-wix-file", async (req, res) => {
-  try {
-    console.log("=== WIX FILE PROCESSING REQUEST ===");
-    const { wixFileUrl, fileName, width, height } = req.body;
-    console.log("Wix File URL:", wixFileUrl);
-    console.log("File name:", fileName);
-    console.log("Dimensions:", width, "x", height);
-    
-    if (!wixFileUrl || !fileName) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Wix file URL and filename required" 
-      });
-    }
-    
-    // Try multiple approaches to get the image from Wix
-    let imageBuffer = null;
-    let mimeType = 'image/jpeg';
-    
-    // Approach 1: Try different Wix URL patterns
-    const urlPatterns = [];
-    
-    if (wixFileUrl.startsWith('wix:image://')) {
-      const wixPath = wixFileUrl.replace('wix:image://', '');
-      
-      // Try various URL formats that might work
-      urlPatterns.push(
-        `https://static.wixstatic.com/media/${wixPath}`,
-        `https://images.wixmp.com/${wixPath}`,
-        `https://www.wixstatic.com/media/${wixPath}`,
-        // Try without the filename part
-        `https://static.wixstatic.com/media/${wixPath.split('/')[0]}`,
-        // Try with different subdomain
-        `https://wixmp-${wixPath.split('/')[0].split('_')[0]}.wixmp.com/img/${wixPath}`
-      );
-    }
-    
-    console.log("Trying URL patterns:", urlPatterns.length);
-    
-    // Try each URL pattern
-    for (const testUrl of urlPatterns) {
-      try {
-        console.log("Testing URL:", testUrl.substring(0, 100) + "...");
-        
-        const response = await fetch(testUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Referer': 'https://www.wix.com/',
-            'Origin': 'https://www.wix.com',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache'
-          },
-          timeout: 10000
-        });
-        
-        console.log("Response status:", response.status, "Content-Type:", response.headers.get('content-type'));
-        
-        if (response.ok) {
-          imageBuffer = await response.arrayBuffer();
-          mimeType = response.headers.get('content-type') || 'image/jpeg';
-          console.log("✅ Successfully fetched image, size:", imageBuffer.byteLength, "bytes");
-          break;
-        }
-      } catch (fetchError) {
-        console.log("❌ Failed:", fetchError.message);
-      }
-    }
-    
-    // If we got image data, convert to base64
-    if (imageBuffer && imageBuffer.byteLength > 0) {
-      const base64 = Buffer.from(imageBuffer).toString('base64');
-      const dataUrl = `data:${mimeType};base64,${base64}`;
-      
-      console.log("✅ Successfully converted to base64, total length:", dataUrl.length);
-      
-      return res.json({
-        success: true,
-        base64Data: dataUrl,
-        fileName: fileName,
-        mimeType: mimeType,
-        size: imageBuffer.byteLength
-      });
-    } else {
-      console.log("❌ Could not fetch image from any URL pattern");
-      
-      return res.json({
-        success: false,
-        error: "Could not access image from Wix URL. The image may not be publicly accessible.",
-        suggestion: "Try uploading the image to a public image hosting service like imgur.com and provide the direct image URL instead."
-      });
-    }
-    
-  } catch (error) {
-    console.error("=== WIX FILE PROCESSING ERROR ===");
-    console.error("Error:", error.message);
-    console.error("Stack:", error.stack);
-    
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// New endpoint to process image URLs (like imgur)
-app.post("/process-image-url", async (req, res) => {
-  try {
-    console.log("=== IMAGE URL PROCESSING REQUEST ===");
-    const { imageUrl } = req.body;
-    console.log("Image URL:", imageUrl);
-    
-    if (!imageUrl) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Image URL required" 
-      });
-    }
-    
-    // Fetch the image from the URL
-    const response = await fetch(imageUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'image/*,*/*;q=0.8'
-      },
-      timeout: 15000
-    });
-    
-    console.log("Response status:", response.status, "Content-Type:", response.headers.get('content-type'));
-    
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
-    }
-    
-    const imageBuffer = await response.arrayBuffer();
-    const mimeType = response.headers.get('content-type') || 'image/jpeg';
-    
-    console.log("✅ Successfully fetched image, size:", imageBuffer.byteLength, "bytes");
-    
-    // Convert to base64
-    const base64 = Buffer.from(imageBuffer).toString('base64');
-    const dataUrl = `data:${mimeType};base64,${base64}`;
-    
-    console.log("✅ Successfully converted to base64, total length:", dataUrl.length);
-    
-    return res.json({
-      success: true,
-      base64Data: dataUrl,
-      mimeType: mimeType,
-      size: imageBuffer.byteLength
-    });
-    
-  } catch (error) {
-    console.error("=== IMAGE URL PROCESSING ERROR ===");
-    console.error("Error:", error.message);
-    
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// Helper endpoint to fetch Wix images (legacy)
-app.post("/fetch-wix-image", async (req, res) => {
-  try {
-    const { wixUrl, fileName } = req.body;
-    console.log("=== WIX IMAGE FETCH REQUEST ===");
-    console.log("Wix URL:", wixUrl);
-    console.log("File name:", fileName);
-    
-    if (!wixUrl) {
-      return res.status(400).json({ error: "Wix URL required" });
-    }
-    
-    // Try multiple URL patterns for Wix media
-    const urlPatterns = [];
-    
-    if (wixUrl.startsWith('wix:image://')) {
-      const wixPath = wixUrl.replace('wix:image://', '');
-      urlPatterns.push(
-        `https://static.wixstatic.com/media/${wixPath}`,
-        `https://images.wixmp.com/${wixPath}`,
-        `https://www.wixstatic.com/media/${wixPath}`
-      );
-    }
-    
-    console.log("Trying URL patterns:", urlPatterns);
-    
-    for (const testUrl of urlPatterns) {
-      try {
-        console.log("Testing:", testUrl);
-        const response = await fetch(testUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; OpenAI-ImageBot/1.0)',
-            'Accept': 'image/*',
-            'Referer': 'https://www.wix.com/'
-          }
-        });
-        
-        if (response.ok) {
-          const buffer = await response.arrayBuffer();
-          const base64 = Buffer.from(buffer).toString('base64');
-          const base64Data = `data:image/jpeg;base64,${base64}`;
-          
-          console.log("✅ Successfully fetched image, size:", buffer.byteLength);
-          
-          return res.json({
-            success: true,
-            base64Data: base64Data,
-            fileName: fileName,
-            size: buffer.byteLength
-          });
-        } else {
-          console.log("❌ Failed with status:", response.status);
-        }
-      } catch (fetchError) {
-        console.log("❌ Fetch error:", fetchError.message);
-      }
-    }
-    
-    console.log("❌ All URL patterns failed");
-    res.json({
-      success: false,
-      error: "Could not fetch image from Wix URL"
-    });
-    
-  } catch (error) {
-    console.error("=== WIX IMAGE FETCH ERROR ===");
-    console.error(error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-app.post("/chat", async (req, res) => {
-  try {
-    console.log("=== NEW CHAT REQUEST ===");
-    const { message, fileData } = req.body;
-    console.log("Message:", message || "(none)");
-    console.log("FileData received:", fileData ? {
-      name: fileData.name,
-      type: fileData.type,
-      hasData: !!fileData.data,
-      hasWixFileUrl: !!fileData.wixFileUrl,
-      fallbackMode: fileData.fallbackMode,
-      dataLength: fileData.data ? fileData.data.length : 0
-    } : "(none)");
-    
-    if (!message && !fileData) {
-      return res.status(400).json({ error: "Need message or fileData." });
-    }
-
-    // Handle images - prioritize direct base64 data
-    if (fileData && (fileData.type?.startsWith('image/') || fileData.name?.match(/\.(jpg|jpeg|png|gif|webp)$/i))) {
-      console.log("Processing image with Chat Completions API");
-      
-      try {
-        let imageUrl;
-        
-        // Method 1: Direct base64 data (best case)
-        if (fileData.data) {
-          imageUrl = fileData.data;
-          console.log("Using direct base64 data from frontend");
-          
-        // Method 2: Wix file URL (fallback)
-        } else if (fileData.wixFileUrl) {
-          console.log("Processing Wix file URL:", fileData.wixFileUrl);
-          
-          const wixUrl = fileData.wixFileUrl;
-          let success = false;
-          
-          if (wixUrl.startsWith('wix:image://')) {
-            const wixPath = wixUrl.replace('wix:image://', '');
-            
-            // Try multiple URL patterns that might work
-            const urlPatterns = [
-              `https://static.wixstatic.com/media/${wixPath}`,
-              `https://images.wixmp.com/${wixPath}`,
-              `https://www.wixstatic.com/media/${wixPath}`
-            ];
-            
-            console.log("Trying URL patterns for Wix media...");
-            
-            for (const testUrl of urlPatterns) {
-              try {
-                console.log("Testing:", testUrl);
-                const response = await fetch(testUrl, {
-                  headers: {
-                    'User-Agent': 'Mozilla/5.0 (compatible; OpenAI-Vision/1.0)',
-                    'Accept': 'image/*',
-                    'Referer': 'https://www.wix.com/'
-                  }
-                });
-                
-                if (response.ok) {
-                  const buffer = await response.arrayBuffer();
-                  const base64 = Buffer.from(buffer).toString('base64');
-                  imageUrl = `data:${fileData.type || 'image/jpeg'};base64,${base64}`;
-                  console.log("✅ Successfully fetched from:", testUrl);
-                  success = true;
-                  break;
-                } else {
-                  console.log("❌ Failed with status:", response.status);
-                }
-              } catch (fetchError) {
-                console.log("❌ Fetch error:", fetchError.message);
-              }
-            }
-            
-            if (!success) {
-              throw new Error("All Wix URL patterns failed - image may not be publicly accessible");
-            }
-          } else {
-            throw new Error("Unsupported Wix URL format");
-          }
-        } else {
-          throw new Error("No image data or URL provided");
-        }
-        
-        // Send to OpenAI Vision API
-        console.log("Sending to OpenAI Vision API...");
-        const response = await openai.chat.completions.create({
-          model: "gpt-4-vision-preview",
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: message || "Please analyze this image and describe what you see in detail."
-                },
-                {
-                  type: "image_url",
-                  image_url: {
-                    url: imageUrl
-                  }
-                }
-              ]
-            }
-          ],
-          max_tokens: 1000
-        });
-        
-        const reply = response.choices[0].message.content;
-        console.log("✅ Vision API response received, length:", reply.length);
-        
-        return res.json({ 
-          reply: reply,
-          method: "vision-api",
-          imageProcessed: true
-        });
-        
-      } catch (visionError) {
-        console.error("❌ Vision API error:", visionError.message);
-        // Don't fall back to assistant - return the error so user knows what happened
-        return res.status(400).json({ 
-          error: `Image processing failed: ${visionError.message}`,
-          suggestion: "Try uploading a different image or send a text message."
-        });
-      }
-    }
-
-    // Original assistant method for non-images or as fallback
-    const tid = await ensureThread();
-
-    // Handle non-image files or fallback
-    if (fileData && !fileData.type?.startsWith('image/')) {
-      console.log("Processing non-image file with Assistant API");
-      
-      try {
-        // For non-image files, upload to OpenAI files
-        const fileBuffer = base64ToBuffer(fileData.data);
-        const fileExtension = getFileExtension(fileData.type);
-        const fileName = fileData.name || `file.${fileExtension}`;
-        
-        console.log("File size:", fileBuffer.length, "bytes");
-        
-        // Create a File-like object for OpenAI
-        const fileBlob = new Blob([fileBuffer], { type: fileData.type });
-        
-        // Upload to OpenAI files
-        const uploadedFile = await openai.files.create({
-          file: new File([fileBlob], fileName, { type: fileData.type }),
-          purpose: "assistants"
-        });
-        
-        console.log("Uploaded to OpenAI file ID:", uploadedFile.id);
-        
-        // Add file message to thread
-        await openai.beta.threads.messages.create(tid, {
-          role: "user",
-          content: "Here's a file for you to analyze.",
-          attachments: [
-            {
-              file_id: uploadedFile.id,
-              tools: [{ type: "file_search" }]
-            }
-          ]
-        });
-        
-      } catch (fileError) {
-        console.error("File processing error:", fileError);
-        return res.status(400).json({ 
-          error: `File processing failed: ${fileError.message}` 
-        });
-      }
-    }
-
-    // Handle text message
-    if (message) {
-      console.log("Received message:", message);
-      await openai.beta.threads.messages.create(tid, {
-        role: "user",
-        content: message
-      });
-    }
-
-    // Check what messages are in the thread before running
-    const preRunMessages = await openai.beta.threads.messages.list(tid);
-    console.log("Messages in thread before run:", preRunMessages.data.length);
-    preRunMessages.data.forEach((msg, idx) => {
-      console.log(`Message ${idx}:`, msg.role, msg.content.map(c => c.type));
-    });
-
-    // Run the assistant
-    console.log("Starting assistant run...");
-    const run = await openai.beta.threads.runs.create(tid, {
-      assistant_id: assistantId
-    });
-
-    // Poll until the run is done with timeout
-    let status;
-    let attempts = 0;
-    const maxAttempts = 60; // 60 seconds timeout
-    
-    do {
-      await new Promise(r => setTimeout(r, 1000));
-      status = await openai.beta.threads.runs.retrieve(tid, run.id);
-      attempts++;
-      
-      console.log(`Run status: ${status.status} (attempt ${attempts})`);
-      
-      if (attempts >= maxAttempts) {
-        throw new Error("Assistant run timed out");
-      }
-      
-      // Handle failed runs
-      if (status.status === "failed") {
-        throw new Error(`Assistant run failed: ${status.last_error?.message || "Unknown error"}`);
-      }
-      
-    } while (!["completed", "failed", "cancelled", "expired"].includes(status.status));
-
-    if (status.status !== "completed") {
-      throw new Error(`Assistant run ended with status: ${status.status}`);
-    }
-
-    // Fetch all messages and return the assistant's latest
-    const msgs = await openai.beta.threads.messages.list(tid);
-    const assistantMessages = msgs.data
-      .filter(m => m.role === "assistant")
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-    if (assistantMessages.length === 0) {
-      throw new Error("No response from assistant");
-    }
-
-    // Get the latest assistant message
-    const latestMessage = assistantMessages[0];
-    const reply = latestMessage.content
-      .filter(content => content.type === "text")
-      .map(content => content.text.value)
-      .join("\n\n");
-
-    console.log("Assistant reply length:", reply.length);
-    
-    res.json({ 
-      reply: reply || "I received your message but couldn't generate a response.",
-      threadId: tid,
-      runId: run.id,
-      method: "assistant-api"
-    });
-
-  } catch (err) {
-    console.error("=== CHAT ERROR ===");
-    console.error("Error type:", err.constructor.name);
-    console.error("Error message:", err.message);
-    console.error("Error stack:", err.stack);
-    console.error("===================");
-    
-    res.status(500).json({ 
-      error: err.message,
-      type: err.constructor.name,
-      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
-    });
-  }
-});
+// OpenAI API configuration
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 
 // Health check endpoint
-app.get("/health", (req, res) => {
+app.get('/', (req, res) => {
   res.json({ 
-    status: "healthy", 
-    timestamp: new Date().toISOString(),
-    threadId: threadId || "none"
+    status: 'OpenAI Chatbot API is running',
+    endpoints: {
+      chat: '/chat',
+      imageAnalysis: '/analyze-wix-image'
+    }
   });
 });
 
-// Reset thread endpoint (useful for testing)
-app.post("/reset", async (req, res) => {
+// Regular chat endpoint (no images)
+app.post('/chat', async (req, res) => {
+  const { message } = req.body;
+  
+  if (!message) {
+    return res.status(400).json({ error: 'Message is required' });
+  }
+
   try {
-    threadId = null;
-    res.json({ message: "Thread reset successfully" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const response = await fetch(OPENAI_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a helpful assistant.'
+          },
+          {
+            role: 'user',
+            content: message
+          }
+        ],
+        temperature: 0.7,
+        max_tokens: 500
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error('OpenAI API error:', error);
+      throw new Error(`OpenAI API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const reply = data.choices[0].message.content;
+    
+    res.json({ reply });
+
+  } catch (error) {
+    console.error('Chat error:', error);
+    res.status(500).json({ 
+      error: 'Failed to process chat request',
+      details: error.message 
+    });
   }
 });
 
-app.listen(port, () => {
-  console.log(`🚀 Server listening on port ${port}`);
-  console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🤖 Assistant ID: ${assistantId ? 'Set' : 'Missing'}`);
-  console.log(`🔑 OpenAI API Key: ${process.env.OPENAI_API_KEY ? 'Set' : 'Missing'}`);
-  console.log(`📸 Image processing endpoints: /process-wix-file, /process-image-url`);
+// Image analysis endpoint for Wix
+app.post('/analyze-wix-image', async (req, res) => {
+  const { imageUrl, imageBase64, message } = req.body;
+  
+  console.log('Received image analysis request');
+  console.log('Has imageUrl:', !!imageUrl);
+  console.log('Has imageBase64:', !!imageBase64);
+  console.log('Message:', message);
+
+  if (!imageUrl && !imageBase64) {
+    return res.status(400).json({ error: 'Either imageUrl or imageBase64 is required' });
+  }
+
+  try {
+    let imageData;
+    
+    // If base64 is provided, use it directly
+    if (imageBase64) {
+      console.log('Using provided base64 image');
+      imageData = imageBase64;
+    } 
+    // Otherwise, try to fetch from URL
+    else if (imageUrl) {
+      console.log('Attempting to fetch image from URL:', imageUrl);
+      
+      try {
+        // Try to fetch the image with proper headers
+        const imageResponse = await fetch(imageUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'image/*',
+            'Referer': 'https://www.man-maid.co.uk'
+          }
+        });
+        
+        if (!imageResponse.ok) {
+          console.error(`Failed to fetch image: ${imageResponse.status} ${imageResponse.statusText}`);
+          throw new Error(`Failed to fetch image: ${imageResponse.status}`);
+        }
+        
+        const buffer = await imageResponse.buffer();
+        const base64 = buffer.toString('base64');
+        const contentType = imageResponse.headers.get('content-type') || 'image/jpeg';
+        
+        console.log('Successfully fetched and converted image');
+        console.log('Content type:', contentType);
+        console.log('Buffer size:', buffer.length);
+        
+        imageData = `data:${contentType};base64,${base64}`;
+        
+      } catch (fetchError) {
+        console.error('Failed to fetch image from URL:', fetchError);
+        
+        // Try alternative approach - direct HTTP access
+        if (imageUrl.includes('wixstatic.com')) {
+          console.log('Trying alternative URL format for Wix image');
+          
+          // Extract the media ID and try a simpler URL
+          const mediaIdMatch = imageUrl.match(/\/media\/([^\/]+)/);
+          if (mediaIdMatch) {
+            const mediaId = mediaIdMatch[1];
+            const alternativeUrl = `https://static.wixstatic.com/media/${mediaId}`;
+            
+            try {
+              const altResponse = await fetch(alternativeUrl);
+              if (altResponse.ok) {
+                const buffer = await altResponse.buffer();
+                const base64 = buffer.toString('base64');
+                imageData = `data:image/jpeg;base64,${base64}`;
+                console.log('Alternative URL worked!');
+              }
+            } catch (altError) {
+              console.error('Alternative URL also failed:', altError);
+            }
+          }
+        }
+        
+        if (!imageData) {
+          return res.status(400).json({ 
+            error: 'Could not access image from any URL pattern. Please ensure the image is publicly accessible or use base64 encoding.',
+            attempted_url: imageUrl
+          });
+        }
+      }
+    }
+    
+    // Ensure imageData is properly formatted
+    if (!imageData.startsWith('data:')) {
+      imageData = `data:image/jpeg;base64,${imageData}`;
+    }
+    
+    console.log('Sending request to OpenAI Vision API');
+    
+    // Call OpenAI Vision API
+    const openAIResponse = await fetch(OPENAI_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: "gpt-4-vision-preview",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: message || "What do you see in this image?"
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: imageData,
+                  detail: "high"
+                }
+              }
+            ]
+          }
+        ],
+        max_tokens: 500
+      })
+    });
+    
+    if (!openAIResponse.ok) {
+      const errorText = await openAIResponse.text();
+      console.error('OpenAI API error:', errorText);
+      throw new Error(`OpenAI API error: ${openAIResponse.status}`);
+    }
+    
+    const result = await openAIResponse.json();
+    const reply = result.choices[0].message.content;
+    
+    console.log('Successfully analyzed image');
+    res.json({ reply });
+    
+  } catch (error) {
+    console.error('Error in analyze-wix-image:', error);
+    res.status(500).json({ 
+      error: 'Failed to analyze image',
+      details: error.message 
+    });
+  }
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ 
+    error: 'Internal server error',
+    details: err.message 
+  });
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`🚀 Server is running on port ${PORT}`);
+  console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔑 OpenAI API Key: ${OPENAI_API_KEY ? 'Set' : 'Not set'}`);
+  
+  if (!OPENAI_API_KEY) {
+    console.error('⚠️  WARNING: OPENAI_API_KEY is not set in environment variables');
+  }
 });
