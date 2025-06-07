@@ -55,6 +55,136 @@ app.use(cors());
 app.use(express.json({ limit: "100mb" })); // Increased limit for large base64 images
 app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
+// New endpoint to process Wix files
+app.post("/process-wix-file", async (req, res) => {
+  try {
+    console.log("=== WIX FILE PROCESSING REQUEST ===");
+    const { wixFileUrl, fileName, width, height } = req.body;
+    console.log("Wix File URL:", wixFileUrl);
+    console.log("File name:", fileName);
+    console.log("Dimensions:", width, "x", height);
+    
+    if (!wixFileUrl || !fileName) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Wix file URL and filename required" 
+      });
+    }
+    
+    // Try multiple approaches to get the image from Wix
+    let imageBuffer = null;
+    let mimeType = 'image/jpeg';
+    
+    // Approach 1: Try different Wix URL patterns
+    const urlPatterns = [];
+    
+    if (wixFileUrl.startsWith('wix:image://')) {
+      const wixPath = wixFileUrl.replace('wix:image://', '');
+      
+      // Try various URL formats that might work
+      urlPatterns.push(
+        `https://static.wixstatic.com/media/${wixPath}`,
+        `https://images.wixmp.com/${wixPath}`,
+        `https://www.wixstatic.com/media/${wixPath}`,
+        // Try without the filename part
+        `https://static.wixstatic.com/media/${wixPath.split('/')[0]}`,
+        // Try with different subdomain
+        `https://wixmp-${wixPath.split('/')[0].split('_')[0]}.wixmp.com/img/${wixPath}`
+      );
+    }
+    
+    console.log("Trying URL patterns:", urlPatterns.length);
+    
+    // Try each URL pattern
+    for (const testUrl of urlPatterns) {
+      try {
+        console.log("Testing URL:", testUrl.substring(0, 100) + "...");
+        
+        const response = await fetch(testUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Referer': 'https://www.wix.com/',
+            'Origin': 'https://www.wix.com',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+          },
+          timeout: 10000
+        });
+        
+        console.log("Response status:", response.status, "Content-Type:", response.headers.get('content-type'));
+        
+        if (response.ok) {
+          imageBuffer = await response.arrayBuffer();
+          mimeType = response.headers.get('content-type') || 'image/jpeg';
+          console.log("✅ Successfully fetched image, size:", imageBuffer.byteLength, "bytes");
+          break;
+        }
+      } catch (fetchError) {
+        console.log("❌ Failed:", fetchError.message);
+      }
+    }
+    
+    // Approach 2: If direct URLs fail, try using a proxy service
+    if (!imageBuffer) {
+      console.log("Direct URLs failed, trying proxy approach...");
+      
+      try {
+        // Try using a CORS proxy (only for testing - you might need a different approach for production)
+        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(urlPatterns[0])}`;
+        const proxyResponse = await fetch(proxyUrl);
+        
+        if (proxyResponse.ok) {
+          const proxyData = await proxyResponse.json();
+          if (proxyData.contents) {
+            // This might be base64 or raw data depending on the proxy
+            console.log("Got proxy response, attempting to process...");
+            // This approach might need more work depending on the proxy response format
+          }
+        }
+      } catch (proxyError) {
+        console.log("Proxy approach failed:", proxyError.message);
+      }
+    }
+    
+    // If we got image data, convert to base64
+    if (imageBuffer && imageBuffer.byteLength > 0) {
+      const base64 = Buffer.from(imageBuffer).toString('base64');
+      const dataUrl = `data:${mimeType};base64,${base64}`;
+      
+      console.log("✅ Successfully converted to base64, total length:", dataUrl.length);
+      
+      return res.json({
+        success: true,
+        base64Data: dataUrl,
+        fileName: fileName,
+        mimeType: mimeType,
+        size: imageBuffer.byteLength
+      });
+    } else {
+      console.log("❌ Could not fetch image from any URL pattern");
+      
+      return res.json({
+        success: false,
+        error: "Could not access image from Wix URL. The image may not be publicly accessible.",
+        suggestion: "Try uploading the image to a public image hosting service like imgur.com and provide the direct image URL instead."
+      });
+    }
+    
+  } catch (error) {
+    console.error("=== WIX FILE PROCESSING ERROR ===");
+    console.error("Error:", error.message);
+    console.error("Stack:", error.stack);
+    
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Helper endpoint to fetch Wix images
 app.post("/fetch-wix-image", async (req, res) => {
   try {
