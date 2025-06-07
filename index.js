@@ -52,7 +52,8 @@ function getFileExtension(mimeType) {
 }
 
 app.use(cors());
-app.use(express.json({ limit: "50mb" })); // Increased limit for base64 files
+app.use(express.json({ limit: "100mb" })); // Increased limit for large base64 images
+app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
 // Helper endpoint to fetch Wix images
 app.post("/fetch-wix-image", async (req, res) => {
