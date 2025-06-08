@@ -25,19 +25,30 @@ if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
-// CORS configuration
+// CORS configuration - Allow all origins for debugging
 const corsOptions = {
-  origin: [
-    'https://www.man-maid.co.uk',
-    'https://www.man-maid-co-uk.filesusr.com'
-  ],
+  origin: true, // Allow all origins for now
   methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: false,
   optionsSuccessStatus: 200
 };
 
+// Handle preflight requests
 app.options('*', cors(corsOptions));
 app.use(cors(corsOptions));
+
+// Additional CORS headers middleware
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
+});
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -54,17 +65,19 @@ app.get('/', (req, res) => {
   });
 });
 
-// Serve uploaded images
+// Serve uploaded images with CORS headers
 app.get('/uploads/:filename', (req, res) => {
   try {
     const filePath = path.join(UPLOAD_DIR, req.params.filename);
     
     if (fs.existsSync(filePath)) {
-      // Add CORS headers for image serving
+      // Enhanced CORS headers for image serving
       res.set({
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET',
-        'Cache-Control': 'public, max-age=3600'
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Origin, X-Requested-With, Content-Type, Accept',
+        'Cache-Control': 'public, max-age=3600',
+        'Content-Type': 'image/jpeg'
       });
       res.sendFile(filePath);
     } else {
@@ -340,18 +353,18 @@ app.listen(PORT, () => {
   console.log(`📍 Server URL: ${SERVER_URL}`);
   console.log(`📁 Upload directory: ${UPLOAD_DIR}`);
   
-  // Environment variable checks
-  if (!OPENAI_API_KEY) {
-    console.warn('⚠️  Missing OPENAI_API_KEY environment variable');
+  // Environment variable checks - don't crash the server
+  if (!OPENAI_API_KEY || OPENAI_API_KEY.trim() === '') {
+    console.warn('⚠️  OPENAI_API_KEY is missing - image analysis will not work');
   } else {
-    console.log('✅ OPENAI_API_KEY is set');
+    console.log('✅ OPENAI_API_KEY is configured');
   }
   
-  if (!OPENAI_ASSISTANT_ID) {
-    console.warn('⚠️  Missing OPENAI_ASSISTANT_ID environment variable');
+  if (!OPENAI_ASSISTANT_ID || OPENAI_ASSISTANT_ID.trim() === '') {
+    console.warn('⚠️  OPENAI_ASSISTANT_ID is missing - image analysis will not work');
   } else {
-    console.log('✅ OPENAI_ASSISTANT_ID is set');
+    console.log('✅ OPENAI_ASSISTANT_ID is configured');
   }
   
-  console.log('🎯 Ready to analyze images!');
+  console.log('🎯 Server started successfully!');
 });
